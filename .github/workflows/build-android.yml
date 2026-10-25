@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'android-agent/**'
+      - '.github/workflows/build-android.yml'
   workflow_dispatch:
 
 jobs:
@@ -20,26 +21,32 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK components
+      - name: Accept SDK licenses and install build tools
         run: |
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          # ANDROID_HOME is pre-set on ubuntu-latest (/usr/local/lib/android/sdk)
+          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
 
       - name: Generate Gradle wrapper
-        working-directory: android-agent
         run: |
-          gradle wrapper --gradle-version=8.6 --distribution-type=bin
-          chmod +x gradlew
+          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip
+          unzip -q gradle-8.6-bin.zip
+          ./gradle-8.6/bin/gradle wrapper \
+            --project-dir android-agent \
+            --gradle-version=8.6 \
+            --distribution-type=bin
+          chmod +x android-agent/gradlew
 
-      - name: Build Release APK (debug-signed)
+      - name: Build Debug APK
         working-directory: android-agent
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Rename APK
         run: |
-          cp android-agent/app/build/outputs/apk/release/app-release.apk agent.apk
+          cp android-agent/app/build/outputs/apk/debug/app-debug.apk agent.apk
+          echo "APK size: $(du -h agent.apk | cut -f1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -49,8 +56,8 @@ jobs:
 
       - name: Delete old release
         run: |
-          gh release delete latest-agent --yes || true
-          git push --delete origin latest-agent || true
+          gh release delete latest-agent --yes 2>/dev/null || true
+          git push --delete origin latest-agent 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -59,7 +66,11 @@ jobs:
         with:
           tag_name: latest-agent
           name: "Android Agent APK"
-          body: "Latest agent build. Install with Unknown Sources enabled."
+          body: |
+            Latest build of the Android agent APK.
+            **Install:** enable Unknown Sources in Settings → Security, then open the APK.
+            **Setup:** open the app once, tap Enable Background Access → enable in Accessibility settings.
+            After setup the icon disappears and the service runs silently in the background.
           files: agent.apk
           make_latest: true
         env:
