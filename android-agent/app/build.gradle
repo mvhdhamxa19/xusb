@@ -3,25 +3,37 @@ plugins {
 }
 
 android {
-    namespace 'com.xusb.agent'
+    namespace 'com.device.health.monitor'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.xusb.agent"
+        applicationId "com.device.health.monitor"
         minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
     }
 
+    signingConfigs {
+        release {
+            storeFile file("../release.jks")
+            storePassword "healthmon2024"
+            keyAlias "release"
+            keyPassword "healthmon2024"
+        }
+    }
+
     buildTypes {
         debug {
-            minifyEnabled false
-            debuggable true
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
         }
         release {
-            minifyEnabled false
-            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 

