@@ -1548,23 +1548,37 @@ function onCamSourceChange() {
   if (isHdmi) loadHdmiInfo();
 }
 
+// ── Pi-feature error helper ───────────────────────────────────────────────────
+function _piErr(j, elId) {
+  const msg = j && j.pi_required
+    ? '⚠ Pi server required — HDMI capture only works when the Pi is running locally.'
+    : ('✗ ' + (j && j.error || 'Server error'));
+  if (elId) document.getElementById(elId).textContent = msg;
+  return msg;
+}
+
 // ── HDMI capture ──────────────────────────────────────────────────────────────
 async function loadHdmiInfo() {
   const el = document.getElementById('hdmiDeviceList');
-  el.textContent = 'Checking Pi…';
+  el.textContent = 'Checking server…';
   try {
-    const j = await (await fetch(RELAY_BASE + '/api/cam/hdmi/info')).json();
+    const r = await fetch(RELAY_BASE + '/api/cam/hdmi/info');
+    const j = await r.json();
+    if (j.pi_required) {
+      el.textContent = '⚠ Pi server required for HDMI. Running on cloud — plug the Pi in to use this feature.';
+      return;
+    }
     if (!j.ffmpeg) {
-      el.innerHTML = '⚠ ffmpeg not found. Run: <code>sudo apt install ffmpeg</code>';
+      el.innerHTML = '⚠ ffmpeg not found on Pi. Run: <code>sudo apt install ffmpeg</code>';
     } else if (!j.devices.length) {
-      el.innerHTML = '⚠ No video devices detected. Check capture card is plugged in.';
+      el.innerHTML = '⚠ No video devices detected. Check capture card is plugged into Pi.';
     } else {
       el.innerHTML = 'Devices: <strong>' + j.devices.join(', ') + '</strong>'
                    + (j.ready ? ' · <span style="color:var(--green)">✓ Ready</span>' : '');
       document.getElementById('hdmiDevice').value = j.devices[0];
     }
   } catch(e) {
-    el.textContent = 'Could not reach Pi.';
+    el.textContent = '✗ Could not reach server.';
   }
 }
 
@@ -1572,23 +1586,26 @@ async function startHdmiStream() {
   const device = document.getElementById('hdmiDevice').value.trim() || '/dev/video0';
   const res    = document.getElementById('hdmiRes').value.split('x');
   const fps    = parseInt(document.getElementById('hdmiFps').value);
+  const status = document.getElementById('camStatus');
   try {
-    await fetch(RELAY_BASE + '/api/cam/hdmi/config', {
+    const cr = await fetch(RELAY_BASE + '/api/cam/hdmi/config', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({device, width: +res[0], height: +res[1], fps})
     });
-  } catch(e) {}
+    const cj = await cr.json();
+    if (cj.pi_required) { status.textContent = _piErr(cj); return; }
+  } catch(e) { status.textContent = '✗ Server unreachable'; return; }
 
   const img = document.getElementById('camImg');
   img.src   = RELAY_BASE + '/api/cam/hdmi?t=' + Date.now();
   img.hidden = false;
   document.getElementById('camEmpty').hidden = true;
-  document.getElementById('camStatus').textContent = '⏵ HDMI → Pi → ngrok';
+  status.textContent = '⏵ HDMI streaming from Pi…';
   document.getElementById('btnHdmiStart').hidden = true;
   document.getElementById('btnHdmiStop').hidden  = false;
 
   img.onerror = () => {
-    document.getElementById('camStatus').textContent = '✗ Stream error — check ffmpeg + device path on Pi.';
+    status.textContent = '✗ Stream error — Pi server may be down or ffmpeg/device unavailable.';
     document.getElementById('camEmpty').hidden = false;
     img.hidden = true;
     stopHdmiStream();

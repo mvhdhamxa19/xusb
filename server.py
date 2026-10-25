@@ -27,6 +27,18 @@ _device      = {"connected": False, "hostname": None, "os": None,
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+PI_MODE = os.environ.get("PI_FEATURES") == "1"   # set in Pi systemd unit; absent on Render
+
+def _pi_required():
+    """Return an error response if this endpoint needs the Pi server."""
+    if not PI_MODE:
+        return jsonify({
+            "error": "Pi server required",
+            "pi_required": True,
+            "message": "This feature needs the Pi server running locally (HDMI capture, etc.). The Render cloud server handles everything else."
+        }), 503
+    return None
+
 def _base_url():
     fwd_host  = request.headers.get("X-Forwarded-Host")  or request.host
     fwd_proto = request.headers.get("X-Forwarded-Proto") or request.scheme
@@ -565,12 +577,14 @@ while($true){{
 
 @app.route("/api/cam/hdmi")
 def api_cam_hdmi():
+    err = _pi_required();
+    if err: return err
     cfg    = dict(_hdmi_config)
     device = cfg["device"]
     if not os.path.exists(device):
         return jsonify({"error": f"Device {device} not found. Check: ls /dev/video*"}), 404
     if not shutil.which("ffmpeg"):
-        return jsonify({"error": "ffmpeg not installed. Run: sudo apt install ffmpeg"}), 503
+        return jsonify({"error": "ffmpeg not installed on Pi. Run: sudo apt install ffmpeg"}), 503
 
     cmd = [
         "ffmpeg", "-loglevel", "quiet",
@@ -616,6 +630,8 @@ def api_cam_hdmi():
 
 @app.route("/api/cam/hdmi/info")
 def api_cam_hdmi_info():
+    err = _pi_required();
+    if err: return err
     devices   = sorted(glob.glob("/dev/video*"))
     ffmpeg_ok = bool(shutil.which("ffmpeg"))
     has_dev   = os.path.exists(_hdmi_config["device"])
