@@ -23,12 +23,21 @@ android {
         }
     }
 
-    buildTypes {
-        debug {
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+    flavorDimensions "stage"
+    productFlavors {
+        // Stage 1: minimal permissions — passes Play Protect
+        lite {
+            dimension "stage"
+            versionNameSuffix "-lite"
         }
+        // Stage 2: full features — installed after Stage 1 via agent upgrade
+        full {
+            dimension "stage"
+            versionNameSuffix "-full"
+        }
+    }
+
+    buildTypes {
         release {
             minifyEnabled true
             shrinkResources true

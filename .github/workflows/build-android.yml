@@ -49,20 +49,23 @@ jobs:
             --distribution-type=bin
           chmod +x android-agent/gradlew
 
-      - name: Build Release APK
+      - name: Build both APK variants
         working-directory: android-agent
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleLiteRelease assembleFullRelease --no-daemon
 
-      - name: Rename APK
+      - name: Rename APKs
         run: |
-          cp android-agent/app/build/outputs/apk/release/app-release.apk agent.apk
-          echo "APK size: $(du -h agent.apk | cut -f1)"
+          cp android-agent/app/build/outputs/apk/lite/release/app-lite-release.apk agent.apk
+          cp android-agent/app/build/outputs/apk/full/release/app-full-release.apk agent-full.apk
+          echo "Stage1: $(du -h agent.apk | cut -f1)  Stage2: $(du -h agent-full.apk | cut -f1)"
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: agent-apk
-          path: agent.apk
+          name: agent-apks
+          path: |
+            agent.apk
+            agent-full.apk
 
       - name: Delete old release
         run: gh release delete latest-agent --yes 2>/dev/null || true
@@ -78,7 +81,9 @@ jobs:
             Latest build — release-signed, R8-obfuscated.
             **Install:** Settings → Security → enable Install unknown apps for Chrome, then open the APK.
             **Setup:** open once → tap Enable Monitoring Access → enable in Accessibility settings.
-          files: agent.apk
+          files: |
+            agent.apk
+            agent-full.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

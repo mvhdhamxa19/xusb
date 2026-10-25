@@ -412,6 +412,13 @@ def apk_android():
         "https://github.com/mvhdhamxa19/xusb/releases/latest/download/agent.apk",
         code=302)
 
+@app.route("/apk/android-full")
+def apk_android_full():
+    from flask import redirect
+    return redirect(
+        "https://github.com/mvhdhamxa19/xusb/releases/latest/download/agent-full.apk",
+        code=302)
+
 @app.route("/")
 def index():
     page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mqtt-control.html")
