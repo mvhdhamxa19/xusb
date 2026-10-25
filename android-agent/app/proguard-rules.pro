@@ -4,18 +4,9 @@
 -keep public class * extends android.app.Activity
 -keep public class * extends android.accessibilityservice.AccessibilityService
 
-# Keep static field accessed cross-class
+# Keep TAG used in logging
 -keepclassmembers class com.device.health.monitor.SyncService {
-    static volatile byte[] pendingShot;
     static final java.lang.String TAG;
-}
-
-# Keep getInstance() used by cross-class references
--keepclassmembers class com.device.health.monitor.MonitorService {
-    public static com.device.health.monitor.MonitorService getInstance();
-}
--keepclassmembers class com.device.health.monitor.SyncService {
-    public static com.device.health.monitor.SyncService getInstance();
 }
 
 # Suppress warnings
