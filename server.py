@@ -350,7 +350,7 @@ def api_ping():
 
 @app.route("/")
 def index():
-    page = os.path.join(os.path.dirname(__file__), "mqtt-control.html")
+    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mqtt-control.html")
     with open(page, "r") as f:
         return Response(f.read(), mimetype="text/html")
 
