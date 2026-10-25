@@ -1,0 +1,66 @@
+name: Build Android APK
+
+on:
+  push:
+    paths:
+      - 'android-agent/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Generate Gradle wrapper
+        working-directory: android-agent
+        run: |
+          gradle wrapper --gradle-version=8.6 --distribution-type=bin
+          chmod +x gradlew
+
+      - name: Build Release APK (debug-signed)
+        working-directory: android-agent
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: |
+          cp android-agent/app/build/outputs/apk/release/app-release.apk agent.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-apk
+          path: agent.apk
+
+      - name: Delete old release
+        run: |
+          gh release delete latest-agent --yes || true
+          git push --delete origin latest-agent || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-agent
+          name: "Android Agent APK"
+          body: "Latest agent build. Install with Unknown Sources enabled."
+          files: agent.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

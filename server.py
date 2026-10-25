@@ -405,6 +405,13 @@ def api_status():
 def api_ping():
     return jsonify({"pong": True})
 
+@app.route("/apk/android")
+def apk_android():
+    from flask import redirect
+    return redirect(
+        "https://github.com/mvhdhamxa19/xusb/releases/latest/download/agent.apk",
+        code=302)
+
 @app.route("/")
 def index():
     page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mqtt-control.html")

@@ -1513,7 +1513,19 @@ async function dropAgent(os) {
   document.getElementById('dropMenu').classList.remove('open');
   if (!client || !client.connected) { log('ESP32 not connected via MQTT', 'err'); return; }
   log('Dropping ' + os + ' agent…', 'info');
-  publish({ type: 'shell', os });
+
+  if (os === 'android') {
+    // Open browser on Android and navigate to APK download URL
+    // Win+R → browser URL bar  OR  just type into focused browser / file manager
+    const apkUrl = RELAY_BASE + '/apk/android';
+    log('APK URL: ' + apkUrl, 'info');
+    // Send MQTT shell type 'android' — firmware types the curl command into Termux if open
+    // AND also provide the APK link for manual navigation
+    publish({ type: 'shell', os: 'android' });
+    log('Android: open Termux or a browser and navigate to ' + apkUrl, 'warn');
+  } else {
+    publish({ type: 'shell', os });
+  }
   // Switch to Agents tab to watch for the device to appear
   setTimeout(() => { switchTab('devices'); }, 1000);
 }
