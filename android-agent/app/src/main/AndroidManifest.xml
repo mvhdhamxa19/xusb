@@ -17,13 +17,20 @@
 
         <activity
             android:name=".MainActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
+        <!-- Alias holds the launcher icon; disabled after setup to hide from app drawer -->
+        <activity-alias
+            android:name=".MainLauncher"
+            android:targetActivity=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <service
             android:name=".SyncService"

