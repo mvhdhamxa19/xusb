@@ -14,7 +14,7 @@ from functools import wraps
 app = Flask(__name__)
 
 # ── UI authentication (cookie-based, custom login overlay) ────────────────────
-_UI_USER    = "mvdhamxa"
+_UI_USER    = "mvhdhamxa"
 _UI_PASS    = "Mhm190012"
 _AUTH_TOKEN = secrets.token_hex(32)   # regenerated each server restart
 _AUTH_COOKIE = "esp_sess"
