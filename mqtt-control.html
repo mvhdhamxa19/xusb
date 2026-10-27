@@ -488,6 +488,20 @@ select:focus { outline: none; border-color: var(--green); }
 </head>
 <body>
 
+<!-- ── Login overlay ── -->
+<div id="loginOverlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:40px 36px;width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:1.3em;font-weight:700;margin-bottom:4px;color:var(--fg);">ESP32 HID Remote</div>
+    <div style="color:var(--fg2);font-size:.85em;margin-bottom:24px;">Sign in to continue</div>
+    <input id="loginUser" type="text" placeholder="Username" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()"
+      style="width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:1em;outline:none;">
+    <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"
+      style="width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:1em;outline:none;">
+    <div id="loginErr" style="color:#f55;font-size:.82em;min-height:18px;margin-bottom:10px;"></div>
+    <button onclick="doLogin()" style="width:100%;padding:11px;background:var(--green);color:var(--bg);border:none;border-radius:6px;font-size:1em;font-weight:600;cursor:pointer;">Sign In</button>
+  </div>
+</div>
+
 <div class="header">
   <div class="logo">
     <div class="dot" id="mqttDot"></div>
@@ -1301,7 +1315,7 @@ function renderDeviceList(devices) {
     const ago = d.ago < 60 ? d.ago + 's' : Math.round(d.ago/60) + 'm';
     const sel = d.id === _selectedDid ? ' selected' : '';
     const off = d.online ? '' : ' offline';
-    const grantBtn = isAndroid ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;border-color:#f90;color:#f90;" title="Upgrade to full agent + enable accessibility">Grant Full Access</button>` : '';
+    const grantBtn = (isAndroid && !d.full) ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;border-color:#f90;color:#f90;" title="Upgrade to full agent + enable accessibility">Grant Full Access</button>` : '';
     return `<div class="device-card${sel}${off}" onclick="selectDevice('${escHtml(d.id)}')">
       <div class="device-dot ${d.online?'on':''}"></div>
       <div class="device-info">
@@ -2134,7 +2148,33 @@ function stopHdmiStream() {
   document.getElementById('btnHdmiStop').hidden  = true;
 }
 
+// ── auth ──────────────────────────────────────────────────────────────────────
+async function checkAuth() {
+  try {
+    const r = await fetch(window.location.origin + '/api/ping');
+    if (r.ok) document.getElementById('loginOverlay').style.display = 'none';
+  } catch(e) {}
+}
+async function doLogin() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const err  = document.getElementById('loginErr');
+  err.textContent = '';
+  try {
+    const r = await fetch(window.location.origin + '/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username: user, password: pass})
+    });
+    if (r.ok) {
+      document.getElementById('loginOverlay').style.display = 'none';
+    } else {
+      err.textContent = 'Invalid username or password';
+    }
+  } catch(e) { err.textContent = 'Connection error — try again'; }
+}
+
 // ── boot ─────────────────────────────────────────────────────────────────────
+checkAuth();
 buildTopics(getSuffix());
 loadMacros();
 connect();
