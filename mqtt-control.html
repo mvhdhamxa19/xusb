@@ -498,6 +498,7 @@ select:focus { outline: none; border-color: var(--green); }
       <span class="badge red" id="badgeMqtt">MQTT: connecting…</span>
       <span class="badge" id="badgeEsp">ESP32: unknown</span>
       <span class="badge" id="badgeTarget" style="display:none;">TARGET: –</span>
+      <span class="badge" id="badgeDevices" style="display:none;background:var(--green);color:var(--bg);cursor:pointer;" onclick="switchTab('devices')" title="Click to view agents">0 online</span>
     </div>
     <div class="drop-wrap" id="dropWrap">
       <button class="btn btn-primary" onclick="toggleDropMenu()" style="font-size:.8em;padding:6px 12px;">
@@ -1279,6 +1280,10 @@ async function loadDevices() {
     const cnt = document.getElementById('agentCount');
     if (online > 0) { cnt.textContent = online; cnt.style.display = ''; }
     else { cnt.style.display = 'none'; }
+    // Update header badge (always visible regardless of active tab)
+    const hdr = document.getElementById('badgeDevices');
+    if (online > 0) { hdr.textContent = online + (online === 1 ? ' online' : ' online'); hdr.style.display = ''; }
+    else { hdr.style.display = 'none'; }
     if (_selectedDid) refreshSelectedDevice(devices);
   } catch(e) {}
   _devListBusy = false;
@@ -2135,6 +2140,9 @@ loadMacros();
 connect();
 updateOsHint();
 restoreCamUrl();
+// Always poll device count for the header badge (every 5s regardless of active tab)
+loadDevices();
+setInterval(loadDevices, 5000);
 // Pause all polling when tab is hidden (browser backgrounded), resume on return
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {

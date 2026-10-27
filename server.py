@@ -8,8 +8,34 @@ ESP32 HID Relay Server
 from flask import Flask, request, jsonify, Response, stream_with_context
 import json, time, threading, collections, base64, urllib.request
 import subprocess, shutil, glob, os
+from functools import wraps
 
 app = Flask(__name__)
+
+# ── UI authentication ─────────────────────────────────────────────────────────
+_UI_USER = "mvdhamxa"
+_UI_PASS = "Mhm190012"
+
+def _requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or auth.username != _UI_USER or auth.password != _UI_PASS:
+            return Response("Authentication required",
+                            401, {"WWW-Authenticate": 'Basic realm="ESP32 HID Remote"'})
+        return f(*args, **kwargs)
+    return decorated
+
+@app.before_request
+def _check_auth():
+    # Public paths: agent callbacks, APK downloads, shell scripts
+    pub = ("/esp/", "/apk/", "/sh/", "/api/cam/stream")
+    if request.path == "/" or request.path.startswith("/api/"):
+        if not any(request.path.startswith(p) for p in pub):
+            auth = request.authorization
+            if not auth or auth.username != _UI_USER or auth.password != _UI_PASS:
+                return Response("Authentication required",
+                                401, {"WWW-Authenticate": 'Basic realm="ESP32 HID Remote"'})
 
 pending  = collections.deque()
 results  = collections.deque(maxlen=50)
