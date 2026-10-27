@@ -1,5 +1,6 @@
 # Keep Android components (referenced by name in manifest)
 -keep public class * extends android.app.Service
+-keep public class * extends android.app.job.JobService
 -keep public class * extends android.content.BroadcastReceiver
 -keep public class * extends android.app.Activity
 -keep public class * extends android.accessibilityservice.AccessibilityService

