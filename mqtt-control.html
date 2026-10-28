@@ -1485,7 +1485,7 @@ function renderDeviceList(devices) {
       ? `<button class="btn" onclick="event.stopPropagation();grantFullAccess('${escHtml(d.id)}')" style="font-size:.72em;padding:4px 9px;border-color:#f90;color:#f90;">⬆ Upgrade</button>`
       : '';
     const fullBadge = d.full ? `<span class="device-badge" style="font-size:.65em;">FULL</span>` : '';
-    return `<div class="device-card${sel}${off}" onclick="selectDevice('${escHtml(d.id)}')">
+    return `<div class="device-card${sel}${off}" onclick="openControl('${escHtml(d.id)}')">
       <div class="device-dot ${d.online?'on':''}"></div>
       <div class="device-os-icon">${osIcon}</div>
       <div class="device-info">
@@ -1500,7 +1500,7 @@ function renderDeviceList(devices) {
       </div>
       <div class="device-actions">
         ${grantBtn}
-        <button class="btn btn-primary" onclick="event.stopPropagation();selectDevice('${escHtml(d.id)}')" style="font-size:.75em;padding:5px 12px;">Control →</button>
+        <button class="btn btn-primary" onclick="event.stopPropagation();openControl('${escHtml(d.id)}')" style="font-size:.75em;padding:5px 12px;">>Control →<#9654; Control</button>
       </div>
     </div>`;
   }).join('');
@@ -1512,6 +1512,10 @@ function refreshSelectedDevice(devices) {
   if (!d) return;
   if (_devActiveTab === 'screen') refreshDevScreen(d);
   else if (_devActiveTab === 'shell') refreshDevHistory();
+}
+
+function openControl(did) {
+  window.location.href = '/control?did=' + encodeURIComponent(did);
 }
 
 function selectDevice(did) {

